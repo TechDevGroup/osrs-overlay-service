@@ -210,14 +210,17 @@ def derive(s: BFStateSnapshot) -> BFGuidance:
     elif s.at_bank:
         if ratio > 0 and not s.coal_bag_full and s.inv_coal > 0:
             return BFGuidance.inv_item(BFAction.FILL_COAL_BAG, ids.ITEM_COAL_BAG)
-        # Coal trip: the observed routine fills the bag with the bank CLOSED, then
-        # REOPENS to withdraw the final loose coal load. If the bag is full but the
-        # furnace still wants a loose load and we don't have one yet, guide back to
-        # the bank (reopen) rather than to the belt — so the coal ghost shows for
-        # that final withdrawal instead of jumping straight to GO_TO_BELT.
-        if (ratio > 0 and s.coal_bag_full and s.inv_coal < ids.COAL_INV_LOAD
-                and _furnace_needs_loose_coal(s, ratio)):
-            return BFGuidance.of(BFAction.GO_TO_BANK)
+        # Bag full but the SECOND half of the load isn't in the inventory yet: the
+        # observed routine fills the bag with the bank CLOSED, then REOPENS to grab
+        # it — loose coal on a coal trip, or ORE on the ore trip. Guide back to the
+        # bank (reopen) instead of jumping to the belt. (The missing ore-trip case
+        # was the "skips adamantite" bug: it saw coal-in-bag and went to the belt.)
+        if ratio > 0 and s.coal_bag_full:
+            if _furnace_needs_loose_coal(s, ratio):
+                if s.inv_coal < ids.COAL_INV_LOAD:
+                    return BFGuidance.of(BFAction.GO_TO_BANK)   # reopen for loose coal
+            elif s.inv_ore < ids.ORE_LOAD:
+                return BFGuidance.of(BFAction.GO_TO_BANK)       # reopen for ORE
         if s.inv_coal > 0 or s.inv_ore > 0 or s.coal_bag_has_coal:
             return BFGuidance.of(BFAction.GO_TO_BELT)
         return BFGuidance.of(BFAction.GO_TO_BANK)
