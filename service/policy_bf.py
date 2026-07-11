@@ -464,23 +464,14 @@ def _bank_bounds(item_id: int, layout: Dict[str, Any]) -> Optional[Dict[str, Any
 def _close_bounds(layout: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The bank close-button bounds (the X, top-right of the bank).
 
-    The button is a dynamic child found via the "Close" action-scan (`bankClose`);
-    that scan can DRIFT to another widget lower on screen. We reject drift with two
-    checks: (1) button-like size (small, ~square — not a scrollbar/container), and
-    (2) near the TOP of the bank container (widget 12.2, reliably probed) — the X is
-    always by the title bar, so a match far below the container top is a bad match."""
-    w = layout.get("widgets") or {}
-    close = w.get("bankClose")
+    `bankClose` is the bridge's smallest-area "Close" match in group 12 — the bank X
+    button — which is deterministic (no drift). Keep a button-like sanity check."""
+    close = (layout.get("widgets") or {}).get("bankClose")
     if not close:
         return None
     bw, bh = close.get("w") or 0, close.get("h") or 0
     if not (8 <= bw <= 60 and 8 <= bh <= 60 and max(bw, bh) <= 2.5 * min(bw, bh)):
         return None
-    container = w.get(f"{ids.BANK_GROUP_ID}.{ids.BANK_CLOSE_CHILD}")  # 12.2 = bank container
-    if container is not None:
-        top = container.get("y")
-        if top is not None and (close.get("y", 0) - top) > 60:
-            return None   # too far below the title bar -> drifted match
     return close
 
 

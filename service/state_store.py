@@ -196,26 +196,14 @@ class StateStore:
                 "x": it.get("x"), "y": it.get("y"), "w": it.get("w"), "h": it.get("h"),
             }
             changed = True
-        widgets = discovered.get("widgets") or {}
-        # Persist the fixed probes first (e.g. the bank container 12.2) so the close
-        # validation below can reference the bank's top edge.
-        for key, box in widgets.items():
-            if key == "bankClose":
+        for key, box in (discovered.get("widgets") or {}).items():
+            # bankClose comes from the bridge's smallest-area "Close" scan (the X);
+            # keep a button-like sanity filter so a stray oversized/scrollbar match
+            # can never be stored.
+            if key == "bankClose" and not _button_like(box):
                 continue
             self.layout["widgets"][key] = box
             changed = True
-        # Bank close button: the "Close" action-scan can DRIFT to another widget
-        # (lower on screen / a scrollbar). LOCK the position once we capture a good
-        # one — a small ~square button near the bank title bar (top of container
-        # 12.2) — and then ignore all further reports so it can't be moved.
-        cbox = widgets.get("bankClose")
-        if cbox is not None:
-            cur = self.layout["widgets"].get("bankClose")
-            container = self.layout["widgets"].get(f"{ids.BANK_GROUP_ID}.{ids.BANK_CLOSE_CHILD}")
-            if (not (cur and cur.get("_locked")) and container is not None
-                    and _valid_close(cbox, container)):
-                self.layout["widgets"]["bankClose"] = {**cbox, "_locked": True}
-                changed = True
         if changed:
             self.save_layout()
 
