@@ -324,12 +324,14 @@ COLOR_COFFER = "#ff4444"
 COLOR_CLOSE = "#ff8800"       # bank close — actionable (time to leave)
 COLOR_CLOSE_DIM = "#80ff8800" # bank close — prestaged position (dim)
 COLOR_TILE = "#ffcc00"        # standing/click tile the user runs to
+COLOR_LEARN = "#00e5ff"       # learned prediction: "what you actually do next"
 
 
 def build_directives(
     s: BFStateSnapshot,
     guidance: BFGuidance,
     layout: Optional[Dict[str, Any]] = None,
+    learned: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Pure map from (snapshot, guidance) -> wire directive list.
 
@@ -442,6 +444,12 @@ def build_directives(
     # areas" block above — bank closed -> ghost, bank open -> live item — so the
     # areas stay lit before AND during banking instead of only when closed.)
 
+    # --- Learned next-action highlight (from the user's own action log) --------
+    # This is the empirical layer: the most likely next click given recent history,
+    # learned from actions.log rather than asserted. Drawn in a distinct color.
+    if learned is not None:
+        directives.extend(_render_learned(learned, s, layout, bt))
+
     # --- HUD (always) ---------------------------------------------------------
     directives.append({"kind": "text", "anchor": "topRight", "lines": _hud_lines(s)})
     return directives
@@ -461,6 +469,39 @@ def _bank_item(item_id: int, color: str, label: str, s: BFStateSnapshot,
 
 def _bank_bounds(item_id: int, layout: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return (layout.get("bankItems") or {}).get(str(item_id))
+
+
+_LEARN_OBJ = {"belt": ObjTarget.CONVEYOR, "dispenser": ObjTarget.DISPENSER,
+              "bankchest": ObjTarget.BANK_CHEST}
+
+
+def _render_learned(learned: Dict[str, Any], s: BFStateSnapshot,
+                    layout: Dict[str, Any], bt: Optional[BarType]) -> List[Dict[str, Any]]:
+    """Render the log-learned next-action prediction as a distinct highlight."""
+    tgt = learned.get("target") or {}
+    kind = tgt.get("kind")
+    label = "next: " + (learned.get("token") or "").split(":")[0]
+    out: List[Dict[str, Any]] = []
+    if kind == "bankItem":
+        out.append(_bank_item(tgt["id"], COLOR_LEARN, label, s, layout))
+    elif kind == "invItem":
+        out.append({"kind": "invItem", "id": tgt["id"], "color": COLOR_LEARN, "label": label})
+    elif kind in _LEARN_OBJ:
+        ot = _LEARN_OBJ[kind]
+        for oid in _OBJ_IDS.get(ot, []):
+            out.append({"kind": "object", "id": oid, "color": COLOR_LEARN,
+                        "label": label, "outline": True})
+        hs = (layout.get("hotspots") or {}).get(str(_TARGET_HOTSPOT_ID.get(ot)))
+        if hs is not None:
+            out.append({"kind": "tile", "plane": hs.get("plane", 0), "x": hs["x"],
+                        "y": hs["y"], "color": COLOR_LEARN, "label": label})
+    elif kind == "close":
+        cb = (layout.get("widgets") or {}).get("bankClose")
+        if cb is not None:
+            out.append({"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID,
+                        "child": cb.get("child", -1), "x": cb["x"], "y": cb["y"],
+                        "color": COLOR_LEARN, "label": "next: Close"})
+    return out
 
 
 def _material_label(item_id: int, bt: Optional[BarType]) -> Optional[str]:

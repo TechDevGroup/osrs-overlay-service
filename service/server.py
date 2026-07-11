@@ -13,6 +13,7 @@ restarting the RuneLite client. Never crash on a bad line — log and continue.
 from __future__ import annotations
 
 import asyncio
+import collections
 import importlib
 import json
 import logging
@@ -20,7 +21,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from . import policy_bf
+from . import policy_bf, action_model
 from .state_store import StateStore
 
 log = logging.getLogger("overlay-service")
@@ -46,6 +47,10 @@ class OverlayService:
         self._policy_path = Path(policy_bf.__file__)
         self._policy_mtime = self._policy_path.stat().st_mtime
         self._last_snapshot = None  # for rebuild-on-reconnect
+        # learned next-action model, built from the user's own action log
+        self.model = action_model.ActionModel(self.store.actions_path)
+        self.history: "collections.deque[str]" = collections.deque(maxlen=2)
+        log.info("action model built from log: %d transitions observed", self.model.count)
 
     # ── hot reload ────────────────────────────────────────────────────────────
     def _maybe_reload_policy(self) -> None:
@@ -71,12 +76,27 @@ class OverlayService:
         snap = snap.replace(rolling_xp_line=self.store.rolling_xp_line(xp_per_bar))
         self._last_snapshot = snap
         guidance = self.policy.derive(snap)
-        directives = self.policy.build_directives(snap, guidance, self.store.layout_for_policy())
+        # Learned prediction: most likely next action given recent history, mapped
+        # to a concrete target the renderer can draw. Picks the top prediction whose
+        # target resolves (skips unmappable tokens).
+        learned = None
+        for tok, prob in self.model.predict(tuple(self.history), k=4):
+            tgt = action_model.token_target(tok, snap.bar_type)
+            if tgt is not None:
+                learned = {"token": tok, "prob": prob, "target": tgt}
+                break
+        directives = self.policy.build_directives(
+            snap, guidance, self.store.layout_for_policy(), learned=learned)
         return {"t": "render", "seq": msg.get("seq", 0),
                 "ttlTicks": TTL_TICKS, "directives": directives}
 
     def _handle_event(self, msg: Dict[str, Any]) -> None:
         self.store.log_action(msg)
+        # feed the learned model live so it adapts to the current session
+        tok = action_model.canonical_token(msg)
+        if tok:
+            self.model.observe(tok)
+            self.history.append(tok)
 
     def _handle_discovered(self, discovered: Dict[str, Any]) -> None:
         self.store.record_discovered(discovered)
