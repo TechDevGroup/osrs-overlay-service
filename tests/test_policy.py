@@ -50,19 +50,18 @@ def test_switch_point_is_fcoal_54_for_adamantite():
     assert derive(BFStateSnapshot(furnace_coal=54, **base)).action == BFAction.WITHDRAW_ORE
 
 
-# ── The coal+ore highlight bug: BOTH must light in their phases ──────────────
-def test_adamantite_coal_phase_also_highlights_ore():
-    """Live bug: only coal highlighted. Ported policy must light coal AND ore 449."""
+# ── Ore-ghost gating: ore shows on the ore trip, NOT on coal-loading trips ───
+def test_adamantite_coal_trip_shows_coal_only():
+    """A coal trip (furnace still needs coal) shows COAL ONLY — the ore ghost is
+    gated to the coal+ore/ore trip so it doesn't clutter coal-loading steps."""
     s = BFStateSnapshot(
         bar_type=BarType.ADAMANTITE, bank_open=True,
         coal_bag_full=True, coal_bag_has_coal=True,
         inv_coal=0, inv_ore=0, furnace_coal=2, furnace_ore=0,
     )
-    g = derive(s)
-    ds = build_directives(s, g)
-    lit = bank_item_ids(ds)
+    lit = bank_item_ids(build_directives(s, derive(s)))
     assert ids.ITEM_COAL in lit
-    assert ids.ITEM_ADAMANTITE_ORE in lit  # 449 must appear in the coal+ore phase
+    assert ids.ITEM_ADAMANTITE_ORE not in lit
 
 
 def test_adamantite_ore_phase_also_highlights_coal():
@@ -163,10 +162,15 @@ def test_fresh_inventory_at_bank_directive_list():
     ds = build_directives(s, g)
     assert g.action == BFAction.WITHDRAW_COAL
     k = kinds(ds)
-    assert "bankItem" in k       # coal (primary) + ore (secondary)
+    assert "bankItem" in k
     assert "text" in k           # HUD panel
+    # coal trip (empty furnace needs coal) -> COAL ONLY; the ore ghost is gated to
+    # the coal+ore/ore trip or the deposit-bars phase.
     assert ids.ITEM_COAL in bank_item_ids(ds)
-    assert ids.ITEM_ADAMANTITE_ORE in bank_item_ids(ds)
+    assert ids.ITEM_ADAMANTITE_ORE not in bank_item_ids(ds)
+    # ...but on the ore trip (furnace coal-satisfied) the ore ghost DOES appear
+    ore_trip = s.replace(furnace_coal=90, coal_bag_full=True)
+    assert ids.ITEM_ADAMANTITE_ORE in bank_item_ids(build_directives(ore_trip, derive(ore_trip)))
 
 
 # ── Snapshot adapter (raw wire -> snapshot) ──────────────────────────────────
