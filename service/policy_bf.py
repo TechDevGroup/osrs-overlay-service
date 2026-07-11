@@ -386,23 +386,25 @@ def build_directives(
     # --- Bank close button: prestage its position BEFORE the UI opens (predicted
     #     from cached bounds) and show it live WHILE the UI is up. Dim as a
     #     position hint; brighten when it's actually time to leave. ------------
+    # Use ONLY the op-text-discovered "bankClose" bounds (reported by the bridge's
+    # widgetFind scan). We do NOT fall back to a guessed child — child 12.13 was a
+    # bad guess that is actually the scrollbar (reported). Until the bridge reports
+    # bankClose, we draw nothing rather than the wrong widget. Bounds are live while
+    # the UI is up and last-seen (cached) before it opens, so one directive covers
+    # both "before the UI" and "while the UI is up".
     widgets_layout = layout.get("widgets") or {}
-    close_bounds = widgets_layout.get("bankClose") \
-        or widgets_layout.get(f"{ids.BANK_GROUP_ID}.{ids.BANK_CLOSE_CHILD}")
+    close_bounds = widgets_layout.get("bankClose")
     in_bank_ctx = s.bank_open or s.at_bank or action == BFAction.GO_TO_BANK
     time_to_leave = s.bank_open and target != ObjTarget.NONE and action not in (
         BFAction.WITHDRAW_COAL, BFAction.WITHDRAW_ORE, BFAction.WITHDRAW_COINS,
         BFAction.FILL_COAL_BAG, BFAction.DEPOSIT_BARS,
     )
-    if in_bank_ctx:
+    if in_bank_ctx and close_bounds is not None:
         cc = COLOR_CLOSE if time_to_leave else COLOR_CLOSE_DIM
-        if s.bank_open:  # live position while the UI is up
-            directives.append({"kind": "widget", "group": ids.BANK_GROUP_ID,
-                               "child": ids.BANK_CLOSE_CHILD, "color": cc, "label": "Close bank"})
-        elif close_bounds is not None:  # predicted position before the UI opens
-            directives.append({"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID,
-                               "child": ids.BANK_CLOSE_CHILD, "x": close_bounds["x"],
-                               "y": close_bounds["y"], "color": cc, "label": "Close bank"})
+        directives.append({"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID,
+                           "child": close_bounds.get("child", -1),
+                           "x": close_bounds["x"], "y": close_bounds["y"],
+                           "color": cc, "label": "Close bank"})
 
     # --- Predicted bank-item ghosts when heading to the bank (bank closed) -----
     # Ghost the WHOLE upcoming withdrawal, not just the single next item. The
@@ -419,14 +421,20 @@ def build_directives(
         BFAction.GO_TO_BANK, BFAction.COLLECT_BARS, BFAction.REFILL_COFFER,
     ):
         pred = derive(s.replace(bank_open=True, inv_bars=0))
+        # Prestage the WHOLE upcoming load prominently. A coal+ore rotation always
+        # withdraws both coal AND the primary ore, so ghost both at full strength
+        # regardless of which micro-step (fill bag / withdraw coal / withdraw ore)
+        # the derive happens to resolve to this tick — otherwise the ore ghost only
+        # ever appears as a brief dim companion and reads as "not showing".
         ghosts = []  # (item_id, color)
-        if pred.bank_item_id >= 0:
-            ghosts.append((pred.bank_item_id, COLOR_PREDICT))
         if bt is not None and bt.coal_per_bar > 0:
-            if pred.action == BFAction.WITHDRAW_COAL:
-                ghosts.append((bt.ore_item_id, COLOR_PREDICT_2))
-            elif pred.action == BFAction.WITHDRAW_ORE:
-                ghosts.append((ids.ITEM_COAL, COLOR_PREDICT_2))
+            ghosts.append((ids.ITEM_COAL, COLOR_PREDICT))
+            ghosts.append((bt.ore_item_id, COLOR_PREDICT))
+        elif bt is not None:
+            ghosts.append((bt.ore_item_id, COLOR_PREDICT))
+        # plus the exact next item if it's something else (e.g. coins when coffer critical)
+        if pred.bank_item_id >= 0 and pred.bank_item_id not in [g[0] for g in ghosts]:
+            ghosts.insert(0, (pred.bank_item_id, COLOR_PREDICT))
         seen = set()
         for gid, gcolor in ghosts:
             if gid in seen:
@@ -592,7 +600,11 @@ SUBSCRIBE = {
         ids.BANK_CHEST, ids.COFFER_EMPTY, ids.COFFER_FULL, ids.COFFER_ACTIVE,
     ],
     "npcs": [],
-    "widgets": [[ids.BANK_GROUP_ID, ids.BANK_CLOSE_CHILD]],
+    "widgets": [],
+    # Ask the bridge to DISCOVER the bank close button by scanning group 12 for the
+    # child whose menu action is "Close" (no guessed child id — 12.13 is the
+    # scrollbar). Reported back as discovered.widgets["bankClose"] {x,y,w,h,child}.
+    "widgetFind": [{"group": ids.BANK_GROUP_ID, "action": "Close", "as": "bankClose"}],
     "events": ["menuOptionClicked", "animationChanged"],
     "tickState": True,
 }
