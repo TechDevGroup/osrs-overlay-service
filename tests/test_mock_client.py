@@ -61,7 +61,7 @@ def test_hello_subscribe_state_render(tmp_path):
 
     assert render["t"] == "render"
     assert render["seq"] == 7          # echoes the state seq
-    assert render["ttlTicks"] == 2
+    assert render["ttlTicks"] == 5
     assert isinstance(render["directives"], list) and render["directives"]
     kinds = [d["kind"] for d in render["directives"]]
     assert "bankItem" in kinds         # withdraw coal highlight

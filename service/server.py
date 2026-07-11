@@ -28,7 +28,68 @@ log = logging.getLogger("overlay-service")
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 43594
-TTL_TICKS = 2
+TTL_TICKS = 5           # bridge keeps highlights this many ticks without a fresh
+                        # render — rides over brief service/network gaps (anti-flicker)
+
+
+def _dir_key(d):
+    """Stable identity of a highlight target, so the same slot/object across ticks
+    is recognised as 'the same indicator' (regardless of color/kind changes)."""
+    k = d.get("kind")
+    if k in ("bankItem", "bankItemPredicted"):
+        return ("bank", d.get("id"))
+    if k == "invItem":
+        return ("inv", d.get("id"))
+    if k == "object":
+        return ("obj", d.get("id"))
+    if k in ("tile", "worldArrow"):
+        return (k, d.get("x"), d.get("y"))
+    if k in ("widget", "widgetPredicted"):
+        return ("close", d.get("group"), d.get("child"))
+    if k == "text":
+        return ("hud", d.get("anchor"))
+    return (k, d.get("x"), d.get("y"), d.get("id"))
+
+
+class DirectiveSmoother:
+    """Anti-flicker persistence. Treats a withdrawal/nav step as a continuous PHASE:
+    once a target's indicator is shown it is held for a short grace window, so a
+    few jittery ticks (state briefly changing the derived target) don't blink it
+    off and back on. A target that stays absent past the grace expires normally.
+    Also debounces rapid color/kind churn on a still-present target."""
+    GRACE = 4            # hold a vanished target this many ticks
+    COLOR_HOLD = 2       # don't restyle a present target more often than this
+
+    def __init__(self):
+        self.cache = {}  # key -> {"dir": d, "seen": tick, "styled": tick}
+
+    def reset(self):
+        self.cache.clear()
+
+    def smooth(self, directives, tick):
+        fresh = {}
+        for d in directives:
+            fresh[_dir_key(d)] = d
+        out = []
+        for key, d in fresh.items():
+            ent = self.cache.get(key)
+            if ent is not None and d != ent["dir"] and (tick - ent["styled"]) < self.COLOR_HOLD:
+                # target still present but style changed too soon -> keep prior look
+                out.append(ent["dir"])
+                ent["seen"] = tick
+            else:
+                styled = tick if (ent is None or d != ent["dir"]) else ent["styled"]
+                self.cache[key] = {"dir": d, "seen": tick, "styled": styled}
+                out.append(d)
+        # persist recently-vanished targets through the grace window (no blink-off)
+        for key, ent in list(self.cache.items()):
+            if key in fresh:
+                continue
+            if key[0] == "hud" or tick - ent["seen"] > self.GRACE:
+                del self.cache[key]        # HUD never persists stale; others expire
+            else:
+                out.append(ent["dir"])
+        return out
 
 
 class OverlayService:
@@ -50,6 +111,8 @@ class OverlayService:
         # learned next-action model, built from the user's own action log
         self.model = action_model.ActionModel(self.store.actions_path)
         self.history: "collections.deque[str]" = collections.deque(maxlen=2)
+        self.smoother = DirectiveSmoother()
+        self._tick = 0
         log.info("action model built from log: %d transitions observed", self.model.count)
 
     # ── hot reload ────────────────────────────────────────────────────────────
@@ -88,6 +151,9 @@ class OverlayService:
         plan_targets = [action_model.token_target(t, snap.bar_type) for t in plan_tokens]
         directives = self.policy.build_directives(
             snap, guidance, self.store.layout_for_policy(), plan=plan_targets)
+        # anti-flicker: hold indicators steadily across the phase (see DirectiveSmoother)
+        self._tick += 1
+        directives = self.smoother.smooth(directives, self._tick)
         return {"t": "render", "seq": msg.get("seq", 0),
                 "ttlTicks": TTL_TICKS, "directives": directives}
 
@@ -130,6 +196,7 @@ class OverlayService:
                             writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
         log.info("client connected: %s", peer)
+        self.smoother.reset()   # fresh anti-flicker state per connection
         # Rebuild from persisted snapshot: session counters/hotspots/layout are
         # already loaded in the store; nothing to send until the client says hello.
         try:
