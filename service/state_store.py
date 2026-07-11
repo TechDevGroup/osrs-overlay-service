@@ -64,6 +64,9 @@ class StateStore:
         self.ore_deposited: int = 0
         self.bars_collected: int = 0
         self.session_start: float = time.time()
+        # sticky bar type: remembered once auto-detected, so XP + policy survive the
+        # empty-inventory ticks where inventory-only detection would return None.
+        self.last_bar_type: Optional[str] = None
         # rolling XP/hr sampler: (timestamp, cumulative bars). Throttled + pruned.
         self.samples: list = [(self.session_start, 0)]
         self._last_sample_t: float = 0.0
@@ -150,9 +153,12 @@ class StateStore:
     def ctx(self, bar_type_config: str = "AUTO",
             coffer_low_minutes: int = 20, coffer_critical_gp: int = 0) -> Dict[str, Any]:
         """The context dict passed into policy_bf.build_snapshot each tick."""
+        btc = bar_type_config
+        if (not btc or btc == "AUTO") and self.last_bar_type:
+            btc = self.last_bar_type   # sticky: keep the detected type across empty ticks
         return {
             "coal_bag_count": self.coal_bag_count,
-            "bar_type_config": bar_type_config,
+            "bar_type_config": btc,
             "coffer_low_minutes": coffer_low_minutes,
             "coffer_critical_gp": coffer_critical_gp,
             "session_seconds": self.session_seconds(),

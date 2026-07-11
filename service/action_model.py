@@ -101,6 +101,24 @@ class ActionModel:
             ranked = [(t, p) for t, p in ranked if accept(t)]
         return ranked[:k]
 
+    def plan(self, history: Tuple[Optional[str], ...], steps: int = 3) -> List[str]:
+        """Greedy rollout of the next `steps` actions, so highlights can LEAD the
+        player (show the next step, and the one after) instead of reacting to the
+        step just taken. Stops early if the model has no confident continuation."""
+        hist = [h for h in history if h is not None]
+        out: List[str] = []
+        for _ in range(steps):
+            preds = self.predict(tuple(hist))
+            if not preds:
+                break
+            nxt = preds[0][0]
+            out.append(nxt)
+            hist.append(nxt)
+            # avoid a self-loop swallowing the plan (e.g. repeated Put-ore-on)
+            if len(out) >= 2 and out[-1] == out[-2]:
+                break
+        return out
+
 
 # ── token -> highlight target ────────────────────────────────────────────────
 # Each token resolves to a semantic target the policy already knows how to draw.

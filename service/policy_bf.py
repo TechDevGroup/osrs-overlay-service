@@ -331,7 +331,7 @@ def build_directives(
     s: BFStateSnapshot,
     guidance: BFGuidance,
     layout: Optional[Dict[str, Any]] = None,
-    learned: Optional[Dict[str, Any]] = None,
+    plan: Optional[List[Optional[Dict[str, Any]]]] = None,
 ) -> List[Dict[str, Any]]:
     """Pure map from (snapshot, guidance) -> wire directive list.
 
@@ -347,110 +347,51 @@ def build_directives(
     bt = s.bar_type
     action = guidance.action
 
-    # Whole banking window: approaching, and every step with the UI up.
-    in_bank_ctx = s.bank_open or s.at_bank or action == BFAction.GO_TO_BANK
-    # Broader: also the return-leg run to the bank (past the dispenser / coffer), so
-    # the coal+ore ghost areas are already up "before" banking, not only at the chest.
-    bank_relevant = in_bank_ctx or (not s.bank_open and action in (
-        BFAction.COLLECT_BARS, BFAction.REFILL_COFFER))
+    # The whole SERIAL banking sequence — approach, open, the close-to-fill-bag and
+    # reopen sub-steps, and every withdraw/deposit — is one persistent window.
+    banking = s.bank_open or s.at_bank or action in (
+        BFAction.GO_TO_BANK, BFAction.COLLECT_BARS, BFAction.REFILL_COFFER,
+        BFAction.WITHDRAW_COAL, BFAction.WITHDRAW_ORE, BFAction.WITHDRAW_COINS,
+        BFAction.FILL_COAL_BAG, BFAction.DEPOSIT_BARS)
 
-    # --- Inventory next-click (e.g. fill the coal bag) -----------------------
-    if guidance.inv_item_id >= 0:
-        directives.append({"kind": "invItem", "id": guidance.inv_item_id,
-                           "color": COLOR_PRIMARY, "label": action.label})
+    reg = _Reg()
+    plan = plan or []
 
-    # --- Bank material areas: keep coal AND ore prestaged the WHOLE banking
-    #     sequence — before via ghost (bank closed), during via live item (bank
-    #     open) — so the areas never blink out between steps. The current step's
-    #     target is emphasized; with no specific target (approach / fill-bag) both
-    #     show prominently. ----------------------------------------------------
-    current_bank_item = guidance.bank_item_id
-    if bank_relevant and bt is not None:
-        materials = [ids.ITEM_COAL, bt.ore_item_id] if bt.coal_per_bar > 0 else [bt.ore_item_id]
-        for mid in materials:
-            emphasize = (mid == current_bank_item) or current_bank_item < 0
-            if s.bank_open:
-                directives.append({"kind": "bankItem", "id": mid,
-                                   "color": COLOR_PRIMARY if emphasize else COLOR_SECONDARY,
-                                   "label": _material_label(mid, bt)})
-            else:
-                b = _bank_bounds(mid, layout)
-                if b is not None:
-                    directives.append({"kind": "bankItemPredicted", "id": mid,
-                                       "x": b["x"], "y": b["y"], "label": _material_label(mid, bt),
-                                       "color": COLOR_PREDICT if emphasize else COLOR_PREDICT_2})
-        # non-material bank withdrawal (e.g. coins for the coffer)
-        if current_bank_item >= 0 and current_bank_item not in materials:
-            directives.append(_bank_item(current_bank_item, COLOR_PRIMARY, action.label, s, layout))
-    elif current_bank_item >= 0:
-        directives.append(_bank_item(current_bank_item, COLOR_PRIMARY, action.label, s, layout))
+    # PRIMARY (bright) = the next action — learned prediction preferred so it LEADS
+    # you, else the state policy. ON-DECK (dim) = the step after, drawn early so the
+    # guidance arrives BEFORE you reach the step instead of after it.
+    primary = _resolve_primary(plan[0] if plan else None, guidance, s, banking)
+    ondeck = plan[1] if len(plan) > 1 else None
 
-    # --- Deposit bars: highlight the bar in the inventory so the user knows what
-    #     to click the moment the bank opens (inventory is visible before/while the
-    #     bank UI is up, so this shows through the open). -----------------------
+    # Context: coal + ore areas stay lit across the whole banking sequence (ghost
+    # when closed, live when open), dim; the primary brightens whichever it is.
+    if banking and bt is not None:
+        for mid in ([ids.ITEM_COAL, bt.ore_item_id] if bt.coal_per_bar > 0 else [bt.ore_item_id]):
+            reg.add(("bank", mid), _PRIO_CONTEXT,
+                    _bank_dir(mid, COLOR_SECONDARY, _material_label(mid, bt), s, layout))
+
+    _add_ondeck(reg, ondeck, s, layout, bt)   # dim look-ahead (drawn before you get there)
+    _add_primary(reg, primary, s, layout, bt)  # bright next click
+
+    # Deposit bars: keep the bar highlighted so it's obvious the moment the bank opens.
     if action == BFAction.DEPOSIT_BARS and bt is not None:
-        directives.append({"kind": "invItem", "id": bt.bar_item_id,
-                           "color": COLOR_PRIMARY, "label": "Deposit bars"})
+        reg.add(("inv", bt.bar_item_id), _PRIO_PRIMARY,
+                {"kind": "invItem", "id": bt.bar_item_id, "color": COLOR_PRIMARY, "label": "Deposit bars"})
 
-    # --- Object highlight for the action's world target ----------------------
-    target = action.object_target
-    if target in _OBJ_IDS:
-        loc = _object_loc(target, layout)
-        for oid in _OBJ_IDS[target]:
-            directives.append({"kind": "object", "id": oid,
-                               "color": COLOR_OBJECT, "label": action.label, "outline": True})
-        if loc is not None:
-            directives.append({"kind": "worldArrow", "plane": loc.get("plane", 0),
-                               "x": loc["x"], "y": loc["y"], "color": COLOR_OBJECT})
-
-    # --- Standing tile the user clicks to run to for this action (learned) -----
-    # e.g. the run-by tile at the bar dispenser for COLLECT_BARS. Hotspots are
-    # stored but were never emitted as tile directives (reported: never showed).
-    hs_id = _TARGET_HOTSPOT_ID.get(target)
-    if hs_id is not None:
-        hs = (layout.get("hotspots") or {}).get(str(hs_id))
-        if hs is not None:
-            directives.append({"kind": "tile", "plane": hs.get("plane", 0),
-                               "x": hs["x"], "y": hs["y"], "color": COLOR_TILE,
-                               "fill": "#33ffcc00", "label": action.label})
-
-    # --- Coffer highlight when low / critical --------------------------------
+    # Coffer when low / critical.
     if s.coffer_critical or (s.coffer_low and s.holding_coins):
         for oid in ids.COFFER_IDS:
-            directives.append({"kind": "object", "id": oid, "color": COLOR_COFFER,
-                               "label": "Coffer", "outline": True})
+            reg.add(("obj", oid), _PRIO_PRIMARY,
+                    {"kind": "object", "id": oid, "color": COLOR_COFFER, "label": "Coffer", "outline": True})
 
-    # --- Bank close button: prestage its position BEFORE the UI opens (predicted
-    #     from cached bounds) and show it live WHILE the UI is up. Dim as a
-    #     position hint; brighten when it's actually time to leave. ------------
-    # Use ONLY the op-text-discovered "bankClose" bounds (reported by the bridge's
-    # widgetFind scan). We do NOT fall back to a guessed child — child 12.13 was a
-    # bad guess that is actually the scrollbar (reported). Until the bridge reports
-    # bankClose, we draw nothing rather than the wrong widget. Bounds are live while
-    # the UI is up and last-seen (cached) before it opens, so one directive covers
-    # both "before the UI" and "while the UI is up".
-    widgets_layout = layout.get("widgets") or {}
-    close_bounds = widgets_layout.get("bankClose")
-    # Keep the close button prestaged the WHOLE time we're in a banking context —
-    # approaching, and throughout every withdraw/deposit step — always at full
-    # strength. Only lighting it "when it's time to leave" defeats prestaging.
-    if in_bank_ctx and close_bounds is not None:
-        directives.append({"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID,
-                           "child": close_bounds.get("child", -1),
-                           "x": close_bounds["x"], "y": close_bounds["y"],
-                           "color": COLOR_CLOSE, "label": "Close bank"})
+    # Bank close button: prestaged across the whole banking sequence, once discovered.
+    cb = (layout.get("widgets") or {}).get("bankClose")
+    if banking and cb is not None:
+        reg.add(("close",), _PRIO_CONTEXT,
+                {"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID, "child": cb.get("child", -1),
+                 "x": cb["x"], "y": cb["y"], "color": COLOR_CLOSE, "label": "Close bank"})
 
-    # (Predicted coal/ore ghosts are emitted by the persistent "Bank material
-    # areas" block above — bank closed -> ghost, bank open -> live item — so the
-    # areas stay lit before AND during banking instead of only when closed.)
-
-    # --- Learned next-action highlight (from the user's own action log) --------
-    # This is the empirical layer: the most likely next click given recent history,
-    # learned from actions.log rather than asserted. Drawn in a distinct color.
-    if learned is not None:
-        directives.extend(_render_learned(learned, s, layout, bt))
-
-    # --- HUD (always) ---------------------------------------------------------
+    directives.extend(reg.emit())
     directives.append({"kind": "text", "anchor": "topRight", "lines": _hud_lines(s)})
     return directives
 
@@ -474,34 +415,132 @@ def _bank_bounds(item_id: int, layout: Dict[str, Any]) -> Optional[Dict[str, Any
 _LEARN_OBJ = {"belt": ObjTarget.CONVEYOR, "dispenser": ObjTarget.DISPENSER,
               "bankchest": ObjTarget.BANK_CHEST}
 
+_PRIO_CONTEXT, _PRIO_PRIMARY = 1, 2
 
-def _render_learned(learned: Dict[str, Any], s: BFStateSnapshot,
-                    layout: Dict[str, Any], bt: Optional[BarType]) -> List[Dict[str, Any]]:
-    """Render the log-learned next-action prediction as a distinct highlight."""
-    tgt = learned.get("target") or {}
-    kind = tgt.get("kind")
-    label = "next: " + (learned.get("token") or "").split(":")[0]
-    out: List[Dict[str, Any]] = []
-    if kind == "bankItem":
-        out.append(_bank_item(tgt["id"], COLOR_LEARN, label, s, layout))
-    elif kind == "invItem":
-        out.append({"kind": "invItem", "id": tgt["id"], "color": COLOR_LEARN, "label": label})
-    elif kind in _LEARN_OBJ:
-        ot = _LEARN_OBJ[kind]
+
+class _Reg:
+    """Highlight registry: one box per target, higher priority wins. Kills the
+    competing/overlapping boxes (learned vs material vs guidance on one slot)."""
+    def __init__(self) -> None:
+        self._m: Dict[Any, Any] = {}
+
+    def add(self, key: Any, prio: int, directive: Optional[Dict[str, Any]]) -> None:
+        if directive is None:
+            return
+        cur = self._m.get(key)
+        if cur is None or prio > cur[0]:
+            self._m[key] = (prio, directive)
+
+    def emit(self) -> List[Dict[str, Any]]:
+        return [d for _, d in self._m.values()]
+
+
+def _bank_dir(item_id: int, color: str, label: Optional[str], s: BFStateSnapshot,
+              layout: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Live bank item when open; cached ghost when closed; nothing if closed and
+    position unknown (never a live bankItem the bridge can't place)."""
+    if s.bank_open:
+        return {"kind": "bankItem", "id": item_id, "color": color, "label": label}
+    b = _bank_bounds(item_id, layout)
+    if b is not None:
+        return {"kind": "bankItemPredicted", "id": item_id, "x": b["x"], "y": b["y"],
+                "color": color, "label": label}
+    return None
+
+
+def _valid_primary(tgt: Dict[str, Any], s: BFStateSnapshot, banking: bool) -> bool:
+    k = tgt.get("kind")
+    if k in ("bankItem", "close"):
+        return banking
+    if k in ("belt", "dispenser", "bankchest"):
+        return not s.bank_open          # world nav only when not in the bank UI
+    if k == "invItem":
+        return True                      # inventory always visible
+    return False
+
+
+def _resolve_primary(learned_target: Optional[Dict[str, Any]], guidance: BFGuidance,
+                     s: BFStateSnapshot, banking: bool) -> Optional[Dict[str, Any]]:
+    """The single next-click target: learned prediction (what you actually do next)
+    when it fits the context, else the state policy's target."""
+    if learned_target and _valid_primary(learned_target, s, banking):
+        return learned_target
+    if guidance.bank_item_id >= 0:
+        return {"kind": "bankItem", "id": guidance.bank_item_id}
+    if guidance.inv_item_id >= 0:
+        return {"kind": "invItem", "id": guidance.inv_item_id}
+    ot = guidance.action.object_target
+    for k, o in _LEARN_OBJ.items():
+        if o == ot:
+            return {"kind": k}
+    return None
+
+
+def _add_primary(reg: _Reg, primary: Optional[Dict[str, Any]], s: BFStateSnapshot,
+                 layout: Dict[str, Any], bt: Optional[BarType]) -> None:
+    if not primary:
+        return
+    k = primary.get("kind")
+    if k == "bankItem":
+        reg.add(("bank", primary["id"]), _PRIO_PRIMARY,
+                _bank_dir(primary["id"], COLOR_PRIMARY, _material_label(primary["id"], bt), s, layout))
+    elif k == "invItem":
+        reg.add(("inv", primary["id"]), _PRIO_PRIMARY,
+                {"kind": "invItem", "id": primary["id"], "color": COLOR_PRIMARY, "label": "Next"})
+    elif k in _LEARN_OBJ:
+        ot = _LEARN_OBJ[k]
         for oid in _OBJ_IDS.get(ot, []):
-            out.append({"kind": "object", "id": oid, "color": COLOR_LEARN,
-                        "label": label, "outline": True})
+            reg.add(("obj", oid), _PRIO_PRIMARY,
+                    {"kind": "object", "id": oid, "color": COLOR_OBJECT, "label": "Next", "outline": True})
+        loc = _object_loc(ot, layout)
+        if loc is not None:
+            reg.add(("arrow", loc["x"], loc["y"]), _PRIO_PRIMARY,
+                    {"kind": "worldArrow", "plane": loc.get("plane", 0),
+                     "x": loc["x"], "y": loc["y"], "color": COLOR_OBJECT})
         hs = (layout.get("hotspots") or {}).get(str(_TARGET_HOTSPOT_ID.get(ot)))
         if hs is not None:
-            out.append({"kind": "tile", "plane": hs.get("plane", 0), "x": hs["x"],
-                        "y": hs["y"], "color": COLOR_LEARN, "label": label})
-    elif kind == "close":
+            reg.add(("tile", hs["x"], hs["y"]), _PRIO_PRIMARY,
+                    {"kind": "tile", "plane": hs.get("plane", 0), "x": hs["x"], "y": hs["y"],
+                     "color": COLOR_TILE, "fill": "#33ffcc00", "label": "Next"})
+    elif k == "close":
         cb = (layout.get("widgets") or {}).get("bankClose")
         if cb is not None:
-            out.append({"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID,
-                        "child": cb.get("child", -1), "x": cb["x"], "y": cb["y"],
-                        "color": COLOR_LEARN, "label": "next: Close"})
-    return out
+            reg.add(("close",), _PRIO_PRIMARY,
+                    {"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID, "child": cb.get("child", -1),
+                     "x": cb["x"], "y": cb["y"], "color": COLOR_CLOSE, "label": "Close bank"})
+
+
+def _add_ondeck(reg: _Reg, ondeck: Optional[Dict[str, Any]], s: BFStateSnapshot,
+                layout: Dict[str, Any], bt: Optional[BarType]) -> None:
+    """The step-after-next, dim, drawn AHEAD of time — only kinds that can render
+    before you arrive (bank ghost, standing tile, world arrow, close)."""
+    if not ondeck:
+        return
+    k = ondeck.get("kind")
+    if k == "bankItem":
+        reg.add(("bank", ondeck["id"]), _PRIO_CONTEXT,
+                _bank_dir(ondeck["id"], COLOR_PREDICT_2, _material_label(ondeck["id"], bt), s, layout))
+    elif k == "invItem":
+        reg.add(("inv", ondeck["id"]), _PRIO_CONTEXT,
+                {"kind": "invItem", "id": ondeck["id"], "color": COLOR_SECONDARY, "label": "soon"})
+    elif k in _LEARN_OBJ:
+        ot = _LEARN_OBJ[k]
+        loc = _object_loc(ot, layout)
+        if loc is not None:
+            reg.add(("arrow", loc["x"], loc["y"]), _PRIO_CONTEXT,
+                    {"kind": "worldArrow", "plane": loc.get("plane", 0),
+                     "x": loc["x"], "y": loc["y"], "color": COLOR_SECONDARY})
+        hs = (layout.get("hotspots") or {}).get(str(_TARGET_HOTSPOT_ID.get(ot)))
+        if hs is not None:
+            reg.add(("tile", hs["x"], hs["y"]), _PRIO_CONTEXT,
+                    {"kind": "tile", "plane": hs.get("plane", 0), "x": hs["x"], "y": hs["y"],
+                     "color": COLOR_SECONDARY, "label": "soon"})
+    elif k == "close":
+        cb = (layout.get("widgets") or {}).get("bankClose")
+        if cb is not None:
+            reg.add(("close",), _PRIO_CONTEXT,
+                    {"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID, "child": cb.get("child", -1),
+                     "x": cb["x"], "y": cb["y"], "color": COLOR_CLOSE, "label": "Close soon"})
 
 
 def _material_label(item_id: int, bt: Optional[BarType]) -> Optional[str]:

@@ -74,3 +74,26 @@ def test_predicts_against_real_log_if_present():
             ok += (p[0][0] == toks[i]); tot += 1
     # the rotation is highly repetitive; order-2 should beat 60%
     assert tot > 50 and ok / tot > 0.6
+
+
+def test_no_duplicate_boxes_and_lookahead():
+    from service.policy_bf import BFStateSnapshot, BarType, build_directives, derive
+    from service.action_model import token_target
+    L = {"bankItems": {"453": {"x": 530, "y": 151}, "449": {"x": 578, "y": 151}},
+         "widgets": {"bankClose": {"x": 700, "y": 80, "child": 786434}}, "hotspots": {}}
+    s = BFStateSnapshot(bar_type=BarType.ADAMANTITE, bank_open=True, inv_coal=0, furnace_coal=2)
+    plan = [token_target("Withdraw-All:Coal", BarType.ADAMANTITE),
+            token_target("Fill:Open coal bag", BarType.ADAMANTITE)]
+    ds = build_directives(s, derive(s), L, plan=plan)
+    # at most one highlight per bank slot / inv item (no competing boxes)
+    seen = {}
+    for d in ds:
+        key = (d["kind"] in ("bankItem", "bankItemPredicted") and ("bank", d.get("id"))) or \
+              (d["kind"] == "invItem" and ("inv", d.get("id")))
+        if key:
+            assert key not in seen, f"duplicate box for {key}"
+            seen[key] = 1
+    # look-ahead: the on-deck (fill bag) is shown while coal is the primary
+    assert any(d["kind"] == "invItem" and d["id"] == 12019 for d in ds)
+    # exactly one close-button directive
+    assert sum(1 for d in ds if d["kind"] == "widgetPredicted") == 1

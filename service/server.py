@@ -74,19 +74,20 @@ class OverlayService:
         self.store.record_sample(snap.bars_collected)
         xp_per_bar = snap.bar_type.xp_per_bar if snap.bar_type else 0.0
         snap = snap.replace(rolling_xp_line=self.store.rolling_xp_line(xp_per_bar))
+        # remember the detected bar type so it sticks across empty-inventory ticks
+        if snap.bar_type is not None:
+            self.store.last_bar_type = snap.bar_type.name
         self._last_snapshot = snap
         guidance = self.policy.derive(snap)
-        # Learned prediction: most likely next action given recent history, mapped
-        # to a concrete target the renderer can draw. Picks the top prediction whose
-        # target resolves (skips unmappable tokens).
-        learned = None
-        for tok, prob in self.model.predict(tuple(self.history), k=4):
-            tgt = action_model.token_target(tok, snap.bar_type)
-            if tgt is not None:
-                learned = {"token": tok, "prob": prob, "target": tgt}
-                break
+        # Look-ahead plan from the learned model: an ordered list of the next few
+        # actions (next-first), each mapped to a concrete target. This LEADS the
+        # player — primary = plan[0], on-deck = plan[1] — so highlights appear a
+        # step before the action, not after it. Unmappable tokens become None and
+        # are skipped downstream.
+        plan_tokens = self.model.plan(tuple(self.history), steps=3)
+        plan_targets = [action_model.token_target(t, snap.bar_type) for t in plan_tokens]
         directives = self.policy.build_directives(
-            snap, guidance, self.store.layout_for_policy(), learned=learned)
+            snap, guidance, self.store.layout_for_policy(), plan=plan_targets)
         return {"t": "render", "seq": msg.get("seq", 0),
                 "ttlTicks": TTL_TICKS, "directives": directives}
 
