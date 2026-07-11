@@ -75,6 +75,7 @@ class StateStore:
         self.layout.setdefault("bankItems", {})
         self.layout.setdefault("widgets", {})
         self.layout.setdefault("objects", {})
+        self._close_hist = []  # recent close-button (x,y,w,h,child) reports (mode stabilizer)
 
         # ── live session accounting (not persisted to disk; rebuilt per run) ──
         self.coal_bag_count: int = -1  # unknown after (re)connect -> err coal-first
@@ -197,11 +198,24 @@ class StateStore:
             }
             changed = True
         for key, box in (discovered.get("widgets") or {}).items():
-            # bankClose comes from the bridge's smallest-area "Close" scan (the X);
-            # keep a button-like sanity filter so a stray oversized/scrollbar match
-            # can never be stored.
-            if key == "bankClose" and not _button_like(box):
-                continue
+            if key == "bankClose":
+                # bankClose is the bridge's smallest-area "Close" scan (the X). It's
+                # right almost every tick but can occasionally land on another small
+                # match. Stabilize on the MODE position over recent reports so an
+                # occasional drift tick is outvoted and the X stays put.
+                if not _button_like(box):
+                    continue
+                self._close_hist.append((box.get("x"), box.get("y"),
+                                         box.get("w"), box.get("h"), box.get("child")))
+                self._close_hist = self._close_hist[-25:]
+                counts: Dict[Any, int] = {}
+                for rec in self._close_hist:
+                    counts[(rec[0], rec[1])] = counts.get((rec[0], rec[1]), 0) + 1
+                mode_xy = max(counts, key=counts.get)
+                for rec in reversed(self._close_hist):
+                    if (rec[0], rec[1]) == mode_xy:
+                        box = {"x": rec[0], "y": rec[1], "w": rec[2], "h": rec[3], "child": rec[4]}
+                        break
             self.layout["widgets"][key] = box
             changed = True
         if changed:
