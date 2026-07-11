@@ -409,17 +409,15 @@ def build_directives(
     # both "before the UI" and "while the UI is up".
     widgets_layout = layout.get("widgets") or {}
     close_bounds = widgets_layout.get("bankClose")
+    # Keep the close button prestaged the WHOLE time we're in a banking context —
+    # approaching, and throughout every withdraw/deposit step — always at full
+    # strength. Only lighting it "when it's time to leave" defeats prestaging.
     in_bank_ctx = s.bank_open or s.at_bank or action == BFAction.GO_TO_BANK
-    time_to_leave = s.bank_open and target != ObjTarget.NONE and action not in (
-        BFAction.WITHDRAW_COAL, BFAction.WITHDRAW_ORE, BFAction.WITHDRAW_COINS,
-        BFAction.FILL_COAL_BAG, BFAction.DEPOSIT_BARS,
-    )
     if in_bank_ctx and close_bounds is not None:
-        cc = COLOR_CLOSE if time_to_leave else COLOR_CLOSE_DIM
         directives.append({"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID,
                            "child": close_bounds.get("child", -1),
                            "x": close_bounds["x"], "y": close_bounds["y"],
-                           "color": cc, "label": "Close bank"})
+                           "color": COLOR_CLOSE, "label": "Close bank"})
 
     # --- Predicted bank-item ghosts when heading to the bank (bank closed) -----
     # Ghost the WHOLE upcoming withdrawal, not just the single next item. The
