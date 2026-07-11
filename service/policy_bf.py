@@ -422,15 +422,14 @@ def build_directives(
             reg.add(("obj", oid), _PRIO_PRIMARY,
                     {"kind": "object", "id": oid, "color": COLOR_COFFER, "label": "Coffer", "outline": True})
 
-    # Bank close button: shown throughout the withdraw-coal -> close -> fill-bag
-    # series (you close the bank to fill the coal bag), while the bank is open and
-    # the bag still needs filling. It drops once the bag is full — then it's time to
-    # withdraw ore / head to the belt, which you click directly to close the bank.
-    # (Never an always-on "leaving" box; the final exit uses the belt, not Close.)
+    # Bank close button: shown from as early as the coal is indicated — i.e. whenever
+    # you're at the bank with the coal bag still to fill (prestaged from the cached
+    # position before the UI opens, live while it's up), through the close-to-fill
+    # series. It drops once the bag is full — then it's ore / belt time, which closes
+    # the bank directly. (Never an always-on "leaving" box.)
     cb = (layout.get("widgets") or {}).get("bankClose")
-    if (cb is not None and s.bank_open and bt is not None and bt.coal_per_bar > 0
-            and not s.coal_bag_full
-            and action in (BFAction.WITHDRAW_COAL, BFAction.FILL_COAL_BAG)):
+    if (cb is not None and bt is not None and bt.coal_per_bar > 0
+            and not s.coal_bag_full and (s.bank_open or s.at_bank)):
         reg.add(("close",), _PRIO_CONTEXT,
                 {"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID, "child": cb.get("child", -1),
                  "x": cb["x"], "y": cb["y"], "w": cb.get("w"), "h": cb.get("h"),
