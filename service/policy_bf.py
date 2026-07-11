@@ -374,13 +374,20 @@ def build_directives(
     # if the furnace still needs loose coal it's a coal trip -> coal only.
     if banking and bt is not None:
         ratio = bt.coal_per_bar
+        materials = []
         if ratio <= 0:
             materials = [bt.ore_item_id]                  # iron: no coal
         else:
-            probe = s.replace(coal_bag_full=True, coal_bag_has_coal=True)
-            ore_trip = not _furnace_needs_loose_coal(probe, ratio)
-            materials = [ids.ITEM_COAL]
-            if ore_trip or s.inv_bars > 0:                # ore trip, or depositing bars
+            ore_trip = not _furnace_needs_loose_coal(s, ratio)  # furnace coal-satisfied
+            # COAL: only while it's still needed — until the bag is full; on a coal
+            # trip, also the loose load. Once the bag's loaded, coal DROPS (it's done
+            # for this trip) instead of lingering next to the ore.
+            if not s.coal_bag_full:
+                materials.append(ids.ITEM_COAL)
+            elif not ore_trip and s.inv_coal < ids.COAL_INV_LOAD:
+                materials.append(ids.ITEM_COAL)           # coal trip's loose load still to grab
+            # ORE: on the ore trip once the bag's full (coal done), or depositing bars.
+            if (ore_trip and s.coal_bag_full) or s.inv_bars > 0:
                 materials.append(bt.ore_item_id)
         for mid in materials:
             reg.add(("bank", mid), _PRIO_CONTEXT,
