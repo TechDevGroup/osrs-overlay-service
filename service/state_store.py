@@ -153,12 +153,12 @@ class StateStore:
     def ctx(self, bar_type_config: str = "AUTO",
             coffer_low_minutes: int = 20, coffer_critical_gp: int = 0) -> Dict[str, Any]:
         """The context dict passed into policy_bf.build_snapshot each tick."""
-        btc = bar_type_config
-        if (not btc or btc == "AUTO") and self.last_bar_type:
-            btc = self.last_bar_type   # sticky: keep the detected type across empty ticks
         return {
             "coal_bag_count": self.coal_bag_count,
-            "bar_type_config": btc,
+            "bar_type_config": bar_type_config,
+            # sticky type is only a FALLBACK for empty-inventory ticks; live detection
+            # still wins, so switching ore (adamantite -> mithril) updates immediately.
+            "last_bar_type": self.last_bar_type,
             "coffer_low_minutes": coffer_low_minutes,
             "coffer_critical_gp": coffer_critical_gp,
             "session_seconds": self.session_seconds(),

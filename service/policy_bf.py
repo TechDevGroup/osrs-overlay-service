@@ -617,7 +617,11 @@ def build_snapshot(raw: Dict[str, Any], ctx: Dict[str, Any]) -> BFStateSnapshot:
 
     # Bar type: explicit config overrides auto-detection.
     cfg = (ctx.get("bar_type_config") or "AUTO").upper()
-    bt = _BAR_CONFIG.get(cfg) if cfg != "AUTO" else _detect_bar_type(inv)
+    if cfg != "AUTO":
+        bt = _BAR_CONFIG.get(cfg)
+    else:
+        # live detection wins; the remembered type only fills empty-inventory ticks
+        bt = _detect_bar_type(inv) or _BAR_CONFIG.get((ctx.get("last_bar_type") or "").upper())
 
     inv_coal = _count_item(inv, ids.ITEM_COAL)
     inv_ore = _count_item(inv, bt.ore_item_id) if bt else 0
