@@ -652,8 +652,11 @@ def build_snapshot(raw: Dict[str, Any], ctx: Dict[str, Any]) -> BFStateSnapshot:
     # Coal bag: session-tracked count (-1 unknown -> err coal-first). A full
     # coal-bag item id in inventory forces full.
     count = ctx.get("coal_bag_count", -1)
-    coal_bag_full = count >= ids.COAL_BAG_CAPACITY or _count_item(inv, ids.ITEM_COAL_BAG_FULL) > 0
-    coal_bag_has_coal = count != 0 or _count_item(inv, ids.ITEM_COAL_BAG_FULL) > 0
+    # -1 = unknown (after reconnect): err coal-first -> treat as NOT full and NOT
+    # carrying coal, so guidance routes to the bank rather than assuming a loaded bag
+    # and heading to the belt (which suppressed the bank ghost). (12020 was GEM_BAG.)
+    coal_bag_full = count >= ids.COAL_BAG_CAPACITY
+    coal_bag_has_coal = count > 0
 
     # Coffer.
     coffer_balance = varbits.get(ids.VAR_COFFER, -1)
