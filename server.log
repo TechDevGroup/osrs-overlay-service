@@ -1,0 +1,8 @@
+2026-07-11 03:46:18,943 INFO overlay-service: overlay service listening on ('127.0.0.1', 43595) (data dir: /tmp/osrs-overlay-service/data)
+2026-07-11 03:46:20,395 INFO overlay-service: client connected: ('127.0.0.1', 55150)
+2026-07-11 03:46:20,396 INFO overlay-service: client hello: mock
+2026-07-11 03:46:20,399 INFO overlay-service: client disconnected: ('127.0.0.1', 55150)
+2026-07-11 03:46:29,701 INFO overlay-service: client connected: ('127.0.0.1', 55914)
+2026-07-11 03:46:29,701 INFO overlay-service: client hello: None
+2026-07-11 03:46:29,914 INFO overlay-service: policy reloaded
+2026-07-11 03:46:29,916 INFO overlay-service: client disconnected: ('127.0.0.1', 55914)

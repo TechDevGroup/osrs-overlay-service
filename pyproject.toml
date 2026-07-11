@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "osrs-overlay-service"
+version = "0.1.0"
+description = "Logic half of a thin-client RuneLite overlay (Blast Furnace policy)"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.setuptools]
+packages = ["service"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
