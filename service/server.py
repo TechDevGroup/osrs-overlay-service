@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from . import policy_bf, action_model
+from . import policy_bf, action_model, ids
 from .state_store import StateStore
 
 log = logging.getLogger("overlay-service")
@@ -133,6 +133,13 @@ class OverlayService:
     def _handle_state(self, msg: Dict[str, Any]) -> Dict[str, Any]:
         ctx = self.store.ctx(self.bar_type, self.coffer_low_minutes, self.coffer_critical_gp)
         snap = self.policy.build_snapshot(msg, ctx)
+        # DATA-DRIVEN coal-bag state (not just Fill/Empty event strings): infer from
+        # inventory + furnace-coal transitions, then rebuild the snapshot so the step
+        # this very tick reflects the corrected bag state. Makes ALL step inputs
+        # data-driven (derive already reads inv/varbits/position for everything else).
+        if self._infer_coal_bag(self._last_snapshot, snap):
+            ctx = self.store.ctx(self.bar_type, self.coffer_low_minutes, self.coffer_critical_gp)
+            snap = self.policy.build_snapshot(msg, ctx)
         # rolling XP/hr sampler (needs wall clock + bar type -> done here, not in the pure policy)
         self.store.record_sample(snap.bars_collected)
         xp_per_bar = snap.bar_type.xp_per_bar if snap.bar_type else 0.0
@@ -156,6 +163,27 @@ class OverlayService:
         directives = self.smoother.smooth(directives, self._tick)
         return {"t": "render", "seq": msg.get("seq", 0),
                 "ttlTicks": TTL_TICKS, "directives": directives}
+
+    def _infer_coal_bag(self, prev, snap) -> bool:
+        """Infer coal-bag state from game DATA (inventory + furnace-coal transitions)
+        rather than only the Fill/Empty event strings. Returns True if it changed."""
+        if prev is None or snap.bar_type is None or snap.bar_type.coal_per_bar <= 0:
+            return False
+        LOAD = 15  # a bag load is 27; a solid drop/jump is unambiguously a load
+        changed = False
+        # Fill: coal left the inventory at the bank with the UI CLOSED (you can only
+        # fill the bag closed) -> it went into the bag.
+        if (snap.at_bank and not snap.bank_open
+                and (prev.inv_coal - snap.inv_coal) >= LOAD
+                and self.store.coal_bag_count < ids.COAL_BAG_CAPACITY):
+            self.store.coal_bag_count = ids.COAL_BAG_CAPACITY
+            changed = True
+        # Empty: furnace coal jumped at the belt -> the bag was emptied onto it.
+        if (snap.at_belt and (snap.furnace_coal - prev.furnace_coal) >= LOAD
+                and self.store.coal_bag_count != 0):
+            self.store.coal_bag_count = 0
+            changed = True
+        return changed
 
     def _handle_event(self, msg: Dict[str, Any]) -> None:
         self.store.log_action(msg)

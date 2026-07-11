@@ -419,11 +419,18 @@ def build_directives(
             reg.add(("obj", oid), _PRIO_PRIMARY,
                     {"kind": "object", "id": oid, "color": COLOR_COFFER, "label": "Coffer", "outline": True})
 
-    # NOTE: the close button is NOT a persistent "leaving" highlight. Closing the
-    # bank is an INTERMEDIATE step (close -> fill coal bag -> reopen); on the final
-    # exit the user clicks the belt directly with the bank still open. So the close
-    # highlight is emitted only when the learned plan predicts "Close" as the next /
-    # on-deck action (handled by _add_primary/_add_ondeck), never as an always-on box.
+    # Bank close button: shown throughout the withdraw-coal -> close -> fill-bag
+    # series (you close the bank to fill the coal bag), while the bank is open and
+    # the bag still needs filling. It drops once the bag is full — then it's time to
+    # withdraw ore / head to the belt, which you click directly to close the bank.
+    # (Never an always-on "leaving" box; the final exit uses the belt, not Close.)
+    cb = (layout.get("widgets") or {}).get("bankClose")
+    if (cb is not None and s.bank_open and bt is not None and bt.coal_per_bar > 0
+            and not s.coal_bag_full
+            and action in (BFAction.WITHDRAW_COAL, BFAction.FILL_COAL_BAG)):
+        reg.add(("close",), _PRIO_CONTEXT,
+                {"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID, "child": cb.get("child", -1),
+                 "x": cb["x"], "y": cb["y"], "color": COLOR_CLOSE, "label": "Close (fill bag)"})
 
     emitted = reg.emit()
     cur_stage = _apply_stage_labels(emitted, guidance, bt)  # tag indicators, get current
