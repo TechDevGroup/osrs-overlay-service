@@ -113,7 +113,13 @@ class OverlayService:
         # already loaded in the store; nothing to send until the client says hello.
         try:
             while True:
-                line = await reader.readline()
+                try:
+                    line = await reader.readline()
+                except (ValueError, asyncio.LimitOverrunError):
+                    # oversized line despite the raised limit — drop this connection
+                    # so the client reconnects cleanly rather than wedging.
+                    log.warning("oversized line — dropping connection to force reconnect")
+                    break
                 if not line:
                     break
                 line = line.strip()
@@ -142,8 +148,14 @@ class OverlayService:
             except Exception:
                 pass
 
+    # Bank-open state messages (full bank contents + ~60 discovered item bounds)
+    # exceed asyncio's default 64 KiB readline limit, which crashes the read loop
+    # exactly when the user opens the bank. Raise it generously.
+    READ_LIMIT = 16 * 1024 * 1024
+
     async def run(self) -> None:
-        server = await asyncio.start_server(self._serve_client, self.host, self.port)
+        server = await asyncio.start_server(
+            self._serve_client, self.host, self.port, limit=self.READ_LIMIT)
         addrs = ", ".join(str(s.getsockname()) for s in server.sockets)
         log.info("overlay service listening on %s (data dir: %s)", addrs, self.store.dir)
         async with server:
