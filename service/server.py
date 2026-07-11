@@ -242,8 +242,13 @@ class OverlayService:
     READ_LIMIT = 16 * 1024 * 1024
 
     async def run(self) -> None:
+        # OVERLAY_HOST may be comma-separated to bind several interfaces (e.g.
+        # "127.0.0.1,10.66.0.1" = loopback for the ssh-forward path + the WireGuard
+        # address for the box to reach directly). Avoids binding 0.0.0.0 (no public
+        # exposure of an unauthenticated service).
+        host = [h.strip() for h in self.host.split(",")] if "," in str(self.host) else self.host
         server = await asyncio.start_server(
-            self._serve_client, self.host, self.port, limit=self.READ_LIMIT)
+            self._serve_client, host, self.port, limit=self.READ_LIMIT)
         addrs = ", ".join(str(s.getsockname()) for s in server.sockets)
         log.info("overlay service listening on %s (data dir: %s)", addrs, self.store.dir)
         async with server:
