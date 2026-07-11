@@ -389,8 +389,13 @@ def build_directives(
     # highlight is emitted only when the learned plan predicts "Close" as the next /
     # on-deck action (handled by _add_primary/_add_ondeck), never as an always-on box.
 
-    directives.extend(reg.emit())
-    directives.append({"kind": "text", "anchor": "topRight", "lines": _hud_lines(s)})
+    emitted = reg.emit()
+    cur_stage = _apply_stage_labels(emitted, guidance, bt)  # tag indicators, get current
+    directives.extend(emitted)
+    hud = _hud_lines(s)
+    if cur_stage is not None:
+        hud.insert(0, f"◆ Stage {cur_stage[0]}: {cur_stage[1]}")
+    directives.append({"kind": "text", "anchor": "topRight", "lines": hud})
     return directives
 
 
@@ -543,6 +548,71 @@ def _add_ondeck(reg: _Reg, ondeck: Optional[Dict[str, Any]], s: BFStateSnapshot,
             reg.add(("close",), _PRIO_CONTEXT,
                     {"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID, "child": cb.get("child", -1),
                      "x": cb["x"], "y": cb["y"], "color": COLOR_CLOSE, "label": "Close soon"})
+
+
+# ── Numbered rotation stages ─────────────────────────────────────────────────
+# A stable number per action so the user can pinpoint "what should show at which
+# stage vs later stages". Each on-screen indicator is tagged with the stage it
+# belongs to; the HUD shows the current stage.
+_STAGE = {
+    BFAction.COLLECT_BARS: 1,
+    BFAction.GO_TO_BANK: 2,
+    BFAction.DEPOSIT_BARS: 3,
+    BFAction.WITHDRAW_COAL: 4,
+    BFAction.FILL_COAL_BAG: 5,
+    BFAction.GO_TO_BELT: 6,
+    BFAction.DEPOSIT_COAL: 7,
+    BFAction.EMPTY_COAL_BAG: 8,
+    BFAction.WITHDRAW_ORE: 9,
+    BFAction.DEPOSIT_ORE: 10,
+    BFAction.REFILL_COFFER: 11,
+    BFAction.WITHDRAW_COINS: 12,
+}
+_ITEM_COAL_BAG_IDS = (ids.ITEM_COAL_BAG, 24480)  # closed + open coal bag
+
+
+def _stage_action_for(d: Dict[str, Any], bt: Optional[BarType]) -> Optional[BFAction]:
+    """Which rotation action an indicator represents (so it can be stage-tagged)."""
+    k = d.get("kind")
+    if k in ("bankItem", "bankItemPredicted", "invItem"):
+        iid = d.get("id")
+        if iid == ids.ITEM_COAL:
+            return BFAction.WITHDRAW_COAL
+        if bt is not None and iid == bt.ore_item_id:
+            return BFAction.WITHDRAW_ORE
+        if iid in _ITEM_COAL_BAG_IDS:
+            return BFAction.FILL_COAL_BAG
+        if bt is not None and iid == bt.bar_item_id:
+            return BFAction.DEPOSIT_BARS
+        if iid == ids.ITEM_COINS:
+            return BFAction.WITHDRAW_COINS
+    elif k == "object":
+        oid = d.get("id")
+        if oid == ids.CONVEYOR_BELT:
+            return BFAction.GO_TO_BELT
+        if oid in (ids.DISPENSER_FULL, ids.DISPENSER_COOLED, ids.DISPENSER_BASE):
+            return BFAction.COLLECT_BARS
+        if oid == ids.BANK_CHEST:
+            return BFAction.GO_TO_BANK
+        if oid in ids.COFFER_IDS:
+            return BFAction.REFILL_COFFER
+    elif k in ("widget", "widgetPredicted"):
+        return BFAction.FILL_COAL_BAG          # bank close = part of the fill-bag step
+    return None
+
+
+def _apply_stage_labels(directives: List[Dict[str, Any]], guidance: BFGuidance,
+                        bt: Optional[BarType]) -> Optional[tuple]:
+    """Prefix each indicator's label with its stage number; return the current
+    (number, label) for the HUD."""
+    for d in directives:
+        act = _stage_action_for(d, bt)
+        n = _STAGE.get(act) if act is not None else None
+        if n is not None:
+            lbl = d.get("label")
+            d["label"] = f"{n}. {lbl}" if lbl else f"Stage {n}"
+    cur = _STAGE.get(guidance.action)
+    return (cur, guidance.action.label) if cur is not None else None
 
 
 def _material_label(item_id: int, bt: Optional[BarType]) -> Optional[str]:
