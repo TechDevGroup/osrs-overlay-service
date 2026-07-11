@@ -367,10 +367,22 @@ def build_directives(
     primary = _resolve_primary(plan[0] if plan else None, guidance, s, banking)
     ondeck = plan[1] if len(plan) > 1 else None
 
-    # Context: coal + ore areas stay lit across the whole banking sequence (ghost
-    # when closed, live when open), dim; the primary brightens whichever it is.
+    # Context: coal stays lit across the whole banking sequence. The ORE ghost only
+    # shows when it's actually relevant — on the coal+ore/ore trip, or when depositing
+    # bars — NOT during coal withdrawals mid-cycle (bars sitting in the dispenser).
+    # Classify the trip with the bag treated as full (skips the fill-bag transient):
+    # if the furnace still needs loose coal it's a coal trip -> coal only.
     if banking and bt is not None:
-        for mid in ([ids.ITEM_COAL, bt.ore_item_id] if bt.coal_per_bar > 0 else [bt.ore_item_id]):
+        ratio = bt.coal_per_bar
+        if ratio <= 0:
+            materials = [bt.ore_item_id]                  # iron: no coal
+        else:
+            probe = s.replace(coal_bag_full=True, coal_bag_has_coal=True)
+            ore_trip = not _furnace_needs_loose_coal(probe, ratio)
+            materials = [ids.ITEM_COAL]
+            if ore_trip or s.inv_bars > 0:                # ore trip, or depositing bars
+                materials.append(bt.ore_item_id)
+        for mid in materials:
             reg.add(("bank", mid), _PRIO_CONTEXT,
                     _bank_dir(mid, COLOR_SECONDARY, _material_label(mid, bt), s, layout))
 
