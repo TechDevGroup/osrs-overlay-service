@@ -18,6 +18,7 @@ import importlib
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -113,6 +114,8 @@ class OverlayService:
         self.history: "collections.deque[str]" = collections.deque(maxlen=2)
         self.smoother = DirectiveSmoother()
         self._tick = 0
+        self._trace_key = None
+        self._trace_path = self.store.dir / "state-trace.log"
         log.info("action model built from log: %d transitions observed", self.model.count)
 
     # ── hot reload ────────────────────────────────────────────────────────────
@@ -161,8 +164,39 @@ class OverlayService:
         # anti-flicker: hold indicators steadily across the phase (see DirectiveSmoother)
         self._tick += 1
         directives = self.smoother.smooth(directives, self._tick)
+        self._trace_state(snap, guidance, directives, msg.get("tick"))
         return {"t": "render", "seq": msg.get("seq", 0),
                 "ttlTicks": TTL_TICKS, "directives": directives}
+
+    # ── state/action trace (order validation: what the user does vs what we show) ─
+    def _trace(self, entry: Dict[str, Any]) -> None:
+        try:
+            with open(self._trace_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+        except OSError:
+            pass
+
+    def _trace_state(self, snap, guidance, directives, tick) -> None:
+        # Log on any meaningful change so the trace shows transitions, not every tick.
+        key = (guidance.action.name, self.store.coal_bag_count, snap.bank_open,
+               snap.at_bank, snap.at_belt)
+        if key == self._trace_key:
+            return
+        self._trace_key = key
+        show = []
+        for d in directives:
+            if d.get("kind") == "text":
+                continue
+            ref = d.get("id", d.get("slot", d.get("child", "")))
+            show.append(f"{d['kind']}:{ref}={d.get('label', '')}")
+        self._trace({
+            "t": "STATE", "ts": round(time.time(), 3), "tick": tick,
+            "action": guidance.action.name, "bag": self.store.coal_bag_count,
+            "coal": snap.inv_coal, "ore": snap.inv_ore, "bars": snap.inv_bars,
+            "fcoal": snap.furnace_coal, "fbars": snap.furnace_bars,
+            "bagfull": snap.coal_bag_full, "bank": snap.bank_open,
+            "atbank": snap.at_bank, "atbelt": snap.at_belt, "show": show,
+        })
 
     def _infer_coal_bag(self, prev, snap) -> bool:
         """Infer coal-bag state from game DATA (inventory + furnace-coal transitions)
@@ -187,6 +221,12 @@ class OverlayService:
 
     def _handle_event(self, msg: Dict[str, Any]) -> None:
         self.store.log_action(msg)
+        if msg.get("name") == "menuOptionClicked":
+            self._trace({"t": "ACT", "ts": round(time.time(), 3),
+                         "opt": msg.get("option"),
+                         "target": (msg.get("target") or "").split("<")[0][:24],
+                         "id": msg.get("id"), "bag": self.store.coal_bag_count})
+            self._trace_key = None   # force a STATE line right after an action
         # feed the learned model live so it adapts to the current session
         tok = action_model.canonical_token(msg)
         if tok:
