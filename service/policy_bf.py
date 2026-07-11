@@ -345,23 +345,43 @@ def build_directives(
     bt = s.bar_type
     action = guidance.action
 
-    # --- Primary next-click target -------------------------------------------
-    if guidance.bank_item_id >= 0:
-        directives.append(_bank_item(guidance.bank_item_id, COLOR_PRIMARY, action.label, s, layout))
+    # Whole banking window: approaching, and every step with the UI up.
+    in_bank_ctx = s.bank_open or s.at_bank or action == BFAction.GO_TO_BANK
+    # Broader: also the return-leg run to the bank (past the dispenser / coffer), so
+    # the coal+ore ghost areas are already up "before" banking, not only at the chest.
+    bank_relevant = in_bank_ctx or (not s.bank_open and action in (
+        BFAction.COLLECT_BARS, BFAction.REFILL_COFFER))
+
+    # --- Inventory next-click (e.g. fill the coal bag) -----------------------
     if guidance.inv_item_id >= 0:
         directives.append({"kind": "invItem", "id": guidance.inv_item_id,
                            "color": COLOR_PRIMARY, "label": action.label})
 
-    # --- Companion coal+ore highlights in the bank-acquire phases ------------
-    # A bank withdrawal of coal or ore means we are assembling a coal+ore load;
-    # light the OTHER material too (dimmed) so the whole phase is visible. This
-    # guarantees adamantite (ratio 3, ore 449) shows an ore highlight in the
-    # coal+ore phase, not coal alone.
-    if bt is not None and bt.coal_per_bar > 0:
-        if action == BFAction.WITHDRAW_COAL:
-            directives.append(_bank_item(bt.ore_item_id, COLOR_SECONDARY, "then: ore", s, layout))
-        elif action == BFAction.WITHDRAW_ORE:
-            directives.append(_bank_item(ids.ITEM_COAL, COLOR_SECONDARY, "coal (in bag)", s, layout))
+    # --- Bank material areas: keep coal AND ore prestaged the WHOLE banking
+    #     sequence — before via ghost (bank closed), during via live item (bank
+    #     open) — so the areas never blink out between steps. The current step's
+    #     target is emphasized; with no specific target (approach / fill-bag) both
+    #     show prominently. ----------------------------------------------------
+    current_bank_item = guidance.bank_item_id
+    if bank_relevant and bt is not None:
+        materials = [ids.ITEM_COAL, bt.ore_item_id] if bt.coal_per_bar > 0 else [bt.ore_item_id]
+        for mid in materials:
+            emphasize = (mid == current_bank_item) or current_bank_item < 0
+            if s.bank_open:
+                directives.append({"kind": "bankItem", "id": mid,
+                                   "color": COLOR_PRIMARY if emphasize else COLOR_SECONDARY,
+                                   "label": _material_label(mid, bt)})
+            else:
+                b = _bank_bounds(mid, layout)
+                if b is not None:
+                    directives.append({"kind": "bankItemPredicted", "id": mid,
+                                       "x": b["x"], "y": b["y"], "label": _material_label(mid, bt),
+                                       "color": COLOR_PREDICT if emphasize else COLOR_PREDICT_2})
+        # non-material bank withdrawal (e.g. coins for the coffer)
+        if current_bank_item >= 0 and current_bank_item not in materials:
+            directives.append(_bank_item(current_bank_item, COLOR_PRIMARY, action.label, s, layout))
+    elif current_bank_item >= 0:
+        directives.append(_bank_item(current_bank_item, COLOR_PRIMARY, action.label, s, layout))
 
     # --- Deposit bars: highlight the bar in the inventory so the user knows what
     #     to click the moment the bank opens (inventory is visible before/while the
@@ -412,51 +432,15 @@ def build_directives(
     # Keep the close button prestaged the WHOLE time we're in a banking context —
     # approaching, and throughout every withdraw/deposit step — always at full
     # strength. Only lighting it "when it's time to leave" defeats prestaging.
-    in_bank_ctx = s.bank_open or s.at_bank or action == BFAction.GO_TO_BANK
     if in_bank_ctx and close_bounds is not None:
         directives.append({"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID,
                            "child": close_bounds.get("child", -1),
                            "x": close_bounds["x"], "y": close_bounds["y"],
                            "color": COLOR_CLOSE, "label": "Close bank"})
 
-    # --- Predicted bank-item ghosts when heading to the bank (bank closed) -----
-    # Ghost the WHOLE upcoming withdrawal, not just the single next item. The
-    # derived "next" item flickers to ore only briefly in the coal+ore phase, so
-    # a single-item prediction shows coal almost always and the ore ghost never
-    # appears (reported bug). Emit primary + companion (coal<->ore) ghosts, same
-    # pairing as the open-bank companion logic above.
-    # Also fire on the return-leg actions (COLLECT_BARS / REFILL_COFFER), not just
-    # GO_TO_BANK: while running back past the dispenser the player is still headed
-    # to the bank, so the dispenser highlight should NOT suppress the upcoming-
-    # withdrawal ghosts (reported: dispenser overrides next highlights until near
-    # the chest).
-    if not s.bank_open and action in (
-        BFAction.GO_TO_BANK, BFAction.COLLECT_BARS, BFAction.REFILL_COFFER,
-    ):
-        # Classify the upcoming bank visit by deriving as-if the coal bag were
-        # already full — this skips the transient fill-bag micro-step so the result
-        # is the ACTUAL withdrawal: a coal trip -> WITHDRAW_COAL, the ore trip ->
-        # WITHDRAW_ORE. Ghost that primary prominently; on the ore trip also show the
-        # coal-bag top-up as a dim companion. This shows the right material for the
-        # trip you're on (incl. the reopen-for-final-coal), without over-showing ore
-        # on pure coal trips.
-        probe = s.replace(bank_open=True, inv_bars=0,
-                          coal_bag_full=True, coal_bag_has_coal=True)
-        pred = derive(probe)
-        ghosts = []  # (item_id, color)
-        if pred.bank_item_id >= 0:
-            ghosts.append((pred.bank_item_id, COLOR_PREDICT))
-        if pred.action == BFAction.WITHDRAW_ORE and bt is not None and bt.coal_per_bar > 0:
-            ghosts.append((ids.ITEM_COAL, COLOR_PREDICT_2))
-        seen = set()
-        for gid, gcolor in ghosts:
-            if gid in seen:
-                continue
-            seen.add(gid)
-            bounds = _bank_bounds(gid, layout)
-            if bounds is not None:
-                directives.append({"kind": "bankItemPredicted", "id": gid,
-                                   "x": bounds["x"], "y": bounds["y"], "color": gcolor})
+    # (Predicted coal/ore ghosts are emitted by the persistent "Bank material
+    # areas" block above — bank closed -> ghost, bank open -> live item — so the
+    # areas stay lit before AND during banking instead of only when closed.)
 
     # --- HUD (always) ---------------------------------------------------------
     directives.append({"kind": "text", "anchor": "topRight", "lines": _hud_lines(s)})
@@ -477,6 +461,14 @@ def _bank_item(item_id: int, color: str, label: str, s: BFStateSnapshot,
 
 def _bank_bounds(item_id: int, layout: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return (layout.get("bankItems") or {}).get(str(item_id))
+
+
+def _material_label(item_id: int, bt: Optional[BarType]) -> Optional[str]:
+    if item_id == ids.ITEM_COAL:
+        return "Coal"
+    if bt is not None and item_id == bt.ore_item_id:
+        return f"{bt.display_name} ore"
+    return None
 
 
 def _object_loc(target: ObjTarget, layout: Dict[str, Any]) -> Optional[Dict[str, Any]]:
