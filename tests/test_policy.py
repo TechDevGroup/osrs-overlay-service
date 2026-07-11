@@ -64,16 +64,20 @@ def test_adamantite_coal_trip_shows_coal_only():
     assert ids.ITEM_ADAMANTITE_ORE not in lit
 
 
-def test_adamantite_ore_phase_also_highlights_coal():
+def test_ore_trip_with_bag_full_shows_ore_only_coal_dropped():
+    # On the ore trip once the bag is loaded, the coal step is DONE -> only ore
+    # remains lit (coal drops instead of lingering next to the ore).
     s = BFStateSnapshot(
         bar_type=BarType.ADAMANTITE, bank_open=True,
         coal_bag_full=True, coal_bag_has_coal=True,
         inv_coal=0, inv_ore=0, furnace_coal=56, furnace_ore=0,
     )
-    g = derive(s)
-    lit = bank_item_ids(build_directives(s, g))
+    lit = bank_item_ids(build_directives(s, derive(s)))
     assert ids.ITEM_ADAMANTITE_ORE in lit
-    assert ids.ITEM_COAL in lit
+    assert ids.ITEM_COAL not in lit
+    # ...but BEFORE the bag is filled on the ore trip, coal (to fill the bag) shows
+    pre = s.replace(coal_bag_full=False, coal_bag_has_coal=False)
+    assert ids.ITEM_COAL in bank_item_ids(build_directives(pre, derive(pre)))
 
 
 # ── Bank-acquire sequence (coal-before-ore) ──────────────────────────────────
