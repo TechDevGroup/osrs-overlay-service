@@ -95,5 +95,9 @@ def test_no_duplicate_boxes_and_lookahead():
             seen[key] = 1
     # look-ahead: the on-deck (fill bag) is shown while coal is the primary
     assert any(d["kind"] == "invItem" and d["id"] == 12019 for d in ds)
-    # exactly one close-button directive
-    assert sum(1 for d in ds if d["kind"] == "widgetPredicted") == 1
+    # close is NOT an always-on box — this plan has no Close, so none should appear
+    assert not any(d["kind"] == "widgetPredicted" for d in ds)
+    # ...but WHEN the plan predicts Close (intermediate fill-bag), it does appear
+    plan2 = [token_target("Close:", BarType.ADAMANTITE), token_target("Fill:Open coal bag", BarType.ADAMANTITE)]
+    ds2 = build_directives(s, derive(s), L, plan=plan2)
+    assert sum(1 for d in ds2 if d["kind"] == "widgetPredicted") == 1

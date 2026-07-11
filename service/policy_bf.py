@@ -384,12 +384,11 @@ def build_directives(
             reg.add(("obj", oid), _PRIO_PRIMARY,
                     {"kind": "object", "id": oid, "color": COLOR_COFFER, "label": "Coffer", "outline": True})
 
-    # Bank close button: prestaged across the whole banking sequence, once discovered.
-    cb = (layout.get("widgets") or {}).get("bankClose")
-    if banking and cb is not None:
-        reg.add(("close",), _PRIO_CONTEXT,
-                {"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID, "child": cb.get("child", -1),
-                 "x": cb["x"], "y": cb["y"], "color": COLOR_CLOSE, "label": "Close bank"})
+    # NOTE: the close button is NOT a persistent "leaving" highlight. Closing the
+    # bank is an INTERMEDIATE step (close -> fill coal bag -> reopen); on the final
+    # exit the user clicks the belt directly with the bank still open. So the close
+    # highlight is emitted only when the learned plan predicts "Close" as the next /
+    # on-deck action (handled by _add_primary/_add_ondeck), never as an always-on box.
 
     directives.extend(reg.emit())
     directives.append({"kind": "text", "anchor": "topRight", "lines": _hud_lines(s)})
@@ -450,10 +449,14 @@ def _bank_dir(item_id: int, color: str, label: Optional[str], s: BFStateSnapshot
 
 def _valid_primary(tgt: Dict[str, Any], s: BFStateSnapshot, banking: bool) -> bool:
     k = tgt.get("kind")
-    if k in ("bankItem", "close"):
+    if k == "bankItem":
         return banking
-    if k in ("belt", "dispenser", "bankchest"):
-        return not s.bank_open          # world nav only when not in the bank UI
+    if k == "close":
+        return banking                   # closing is an intermediate banking sub-step
+    if k == "bankchest":
+        return not s.bank_open           # opening the chest only when it's closed
+    if k in ("belt", "dispenser"):
+        return True                      # clickable even with the bank UI open (belt-exit)
     if k == "invItem":
         return True                      # inventory always visible
     return False
