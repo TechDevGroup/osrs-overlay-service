@@ -76,9 +76,10 @@ COFFER_DRAIN_PER_MINUTE = 1_200
 COFFER_MAX = 20_000_000
 
 # ── Widgets ─────────────────────────────────────────────────────────────────
-# Bank close button — protocol convention group 12 child 13 (see PROTOCOL.md example).
+# Bank close button — DISCOVERED as widget 12.2 (id 786434). Use the fixed id
+# directly; the "Close" action-scan drifts to other widgets (scrollbar, etc.).
 BANK_GROUP_ID = 12
-BANK_CLOSE_CHILD = 13
+BANK_CLOSE_CHILD = 2
 
 
 def is_dispenser_object(obj_id: int) -> bool:

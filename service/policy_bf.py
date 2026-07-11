@@ -427,7 +427,7 @@ def build_directives(
     # position before the UI opens, live while it's up), through the close-to-fill
     # series. It drops once the bag is full — then it's ore / belt time, which closes
     # the bank directly. (Never an always-on "leaving" box.)
-    cb = (layout.get("widgets") or {}).get("bankClose")
+    cb = _close_bounds(layout)
     if (cb is not None and bt is not None and bt.coal_per_bar > 0
             and not s.coal_bag_full and (s.bank_open or s.at_bank)):
         reg.add(("close",), _PRIO_CONTEXT,
@@ -459,6 +459,20 @@ def _bank_item(item_id: int, color: str, label: str, s: BFStateSnapshot,
 
 def _bank_bounds(item_id: int, layout: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return (layout.get("bankItems") or {}).get(str(item_id))
+
+
+def _close_bounds(layout: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The bank close-button bounds. Prefer the FIXED 12.2 probe (stable id, same
+    widget every tick) over the "Close" action-scan (drifts to other widgets).
+    Only accept button-like bounds (not a scrollbar) either way."""
+    w = layout.get("widgets") or {}
+    for key in (f"{ids.BANK_GROUP_ID}.{ids.BANK_CLOSE_CHILD}", "bankClose"):
+        b = w.get(key)
+        if b:
+            bw, bh = b.get("w") or 0, b.get("h") or 0
+            if 8 <= bw <= 60 and 8 <= bh <= 60 and max(bw, bh) <= 2.5 * min(bw, bh):
+                return b
+    return None
 
 
 _LEARN_OBJ = {"belt": ObjTarget.CONVEYOR, "dispenser": ObjTarget.DISPENSER,
@@ -556,7 +570,7 @@ def _add_primary(reg: _Reg, primary: Optional[Dict[str, Any]], s: BFStateSnapsho
                     {"kind": "tile", "plane": hs.get("plane", 0), "x": hs["x"], "y": hs["y"],
                      "color": COLOR_TILE, "fill": "#33ffcc00", "label": "Next"})
     elif k == "close":
-        cb = (layout.get("widgets") or {}).get("bankClose")
+        cb = _close_bounds(layout)
         if cb is not None:
             reg.add(("close",), _PRIO_PRIMARY,
                     {"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID, "child": cb.get("child", -1),
@@ -589,7 +603,7 @@ def _add_ondeck(reg: _Reg, ondeck: Optional[Dict[str, Any]], s: BFStateSnapshot,
                     {"kind": "tile", "plane": hs.get("plane", 0), "x": hs["x"], "y": hs["y"],
                      "color": COLOR_SECONDARY, "label": "soon"})
     elif k == "close":
-        cb = (layout.get("widgets") or {}).get("bankClose")
+        cb = _close_bounds(layout)
         if cb is not None:
             reg.add(("close",), _PRIO_CONTEXT,
                     {"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID, "child": cb.get("child", -1),
@@ -822,7 +836,10 @@ SUBSCRIBE = {
         ids.BANK_CHEST, ids.COFFER_EMPTY, ids.COFFER_FULL, ids.COFFER_ACTIVE,
     ],
     "npcs": [],
-    "widgets": [],
+    # Fixed probe of the bank's X button (12.2) — a STABLE id, reported the same
+    # every tick. Preferred over the "Close" action-scan, which drifts to other
+    # widgets. widgetFind stays as a discovery fallback for other client layouts.
+    "widgets": [[ids.BANK_GROUP_ID, ids.BANK_CLOSE_CHILD]],
     # Ask the bridge to DISCOVER the bank close button by scanning group 12 for the
     # child whose menu action is "Close" (no guessed child id — 12.13 is the
     # scrollbar). Reported back as discovered.widgets["bankClose"] {x,y,w,h,child}.
