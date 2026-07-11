@@ -40,24 +40,44 @@ Listens on `127.0.0.1:43594` by default. Environment overrides:
 
 | var                   | default     | meaning                              |
 |-----------------------|-------------|--------------------------------------|
-| `OVERLAY_HOST`        | `127.0.0.1` | bind address (keep it loopback)      |
+| `OVERLAY_HOST`        | `127.0.0.1` | bind address(es); comma-separated to bind several (e.g. `127.0.0.1,10.66.0.1`) — never `0.0.0.0` (unauthenticated service) |
 | `OVERLAY_PORT`        | `43594`     | TCP port                             |
 | `OVERLAY_DATA_DIR`    | `~/.runelite/overlay-service/` (fallback `./data`) | persistence dir |
 | `OVERLAY_BAR_TYPE`    | `AUTO`      | `AUTO`/`IRON`/`STEEL`/`MITHRIL`/`ADAMANTITE`/`RUNITE` |
 | `OVERLAY_LOG`         | `INFO`      | log level                            |
 
-## Exposing to a remote RuneLite over SSH
+## Exposing to a remote RuneLite
 
-The service binds loopback only. To reach it from a RuneLite running on another
-host, use an SSH **remote forward** from the RuneLite machine back to this host:
+The service binds loopback only by default. Two ways to reach it from a RuneLite
+on another host:
+
+### WireGuard direct (preferred — no ssh forward in the hot path)
+
+Put both machines on a WireGuard tunnel (here `10.66.0.1` = this host,
+`10.66.0.2` = the RuneLite box). Bind the service on the WG interface too and
+point the plugin straight at it:
+
+```bash
+OVERLAY_HOST=127.0.0.1,10.66.0.1 OVERLAY_PORT=43599 python -m service
+```
+
+Then in the Overlay Bridge plugin config set **Host = `10.66.0.1`**, **Port =
+`43599`**. The plugin talks to the service directly over WireGuard — no ssh
+forward, so the live overlay is unaffected by any ssh control-channel hiccup.
+Binding the WG address (not `0.0.0.0`) keeps the service reachable only over the
+tunnel. The `onConfigChanged` handler bounces the connection when host/port
+change, so this needs no client restart.
+
+### SSH remote forward (fallback)
 
 ```bash
 # run ON the machine where RuneLite runs; forwards its localhost:43594 to ours
-ssh -R 43594:localhost:43594 user@this-host
+ssh -R 43594:localhost:43599 user@this-host
 ```
 
-The plugin then connects to `127.0.0.1:43594` on its own machine and the traffic
-tunnels here. Loopback-only + SSH transport keeps the trust boundary intact.
+The plugin connects to `127.0.0.1:43594` on its own machine and the traffic
+tunnels here. Note this rides the ssh channel in the hot path — a dropped tunnel
+drops the overlay; prefer the WireGuard direct route above.
 
 ## Test
 

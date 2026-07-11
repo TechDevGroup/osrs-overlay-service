@@ -324,7 +324,6 @@ COLOR_COFFER = "#ff4444"
 COLOR_CLOSE = "#ff8800"       # bank close — actionable (time to leave)
 COLOR_CLOSE_DIM = "#80ff8800" # bank close — prestaged position (dim)
 COLOR_TILE = "#ffcc00"        # standing/click tile the user runs to
-COLOR_LEARN = "#00e5ff"       # learned prediction: "what you actually do next"
 
 
 def build_directives(
