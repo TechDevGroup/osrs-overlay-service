@@ -209,6 +209,14 @@ def derive(s: BFStateSnapshot) -> BFGuidance:
     elif s.at_bank:
         if ratio > 0 and not s.coal_bag_full and s.inv_coal > 0:
             return BFGuidance.inv_item(BFAction.FILL_COAL_BAG, ids.ITEM_COAL_BAG)
+        # Coal trip: the observed routine fills the bag with the bank CLOSED, then
+        # REOPENS to withdraw the final loose coal load. If the bag is full but the
+        # furnace still wants a loose load and we don't have one yet, guide back to
+        # the bank (reopen) rather than to the belt — so the coal ghost shows for
+        # that final withdrawal instead of jumping straight to GO_TO_BELT.
+        if (ratio > 0 and s.coal_bag_full and s.inv_coal < ids.COAL_INV_LOAD
+                and _furnace_needs_loose_coal(s, ratio)):
+            return BFGuidance.of(BFAction.GO_TO_BANK)
         if s.inv_coal > 0 or s.inv_ore > 0 or s.coal_bag_has_coal:
             return BFGuidance.of(BFAction.GO_TO_BELT)
         return BFGuidance.of(BFAction.GO_TO_BANK)
@@ -355,6 +363,13 @@ def build_directives(
         elif action == BFAction.WITHDRAW_ORE:
             directives.append(_bank_item(ids.ITEM_COAL, COLOR_SECONDARY, "coal (in bag)", s, layout))
 
+    # --- Deposit bars: highlight the bar in the inventory so the user knows what
+    #     to click the moment the bank opens (inventory is visible before/while the
+    #     bank UI is up, so this shows through the open). -----------------------
+    if action == BFAction.DEPOSIT_BARS and bt is not None:
+        directives.append({"kind": "invItem", "id": bt.bar_item_id,
+                           "color": COLOR_PRIMARY, "label": "Deposit bars"})
+
     # --- Object highlight for the action's world target ----------------------
     target = action.object_target
     if target in _OBJ_IDS:
@@ -420,21 +435,21 @@ def build_directives(
     if not s.bank_open and action in (
         BFAction.GO_TO_BANK, BFAction.COLLECT_BARS, BFAction.REFILL_COFFER,
     ):
-        pred = derive(s.replace(bank_open=True, inv_bars=0))
-        # Prestage the WHOLE upcoming load prominently. A coal+ore rotation always
-        # withdraws both coal AND the primary ore, so ghost both at full strength
-        # regardless of which micro-step (fill bag / withdraw coal / withdraw ore)
-        # the derive happens to resolve to this tick — otherwise the ore ghost only
-        # ever appears as a brief dim companion and reads as "not showing".
+        # Classify the upcoming bank visit by deriving as-if the coal bag were
+        # already full — this skips the transient fill-bag micro-step so the result
+        # is the ACTUAL withdrawal: a coal trip -> WITHDRAW_COAL, the ore trip ->
+        # WITHDRAW_ORE. Ghost that primary prominently; on the ore trip also show the
+        # coal-bag top-up as a dim companion. This shows the right material for the
+        # trip you're on (incl. the reopen-for-final-coal), without over-showing ore
+        # on pure coal trips.
+        probe = s.replace(bank_open=True, inv_bars=0,
+                          coal_bag_full=True, coal_bag_has_coal=True)
+        pred = derive(probe)
         ghosts = []  # (item_id, color)
-        if bt is not None and bt.coal_per_bar > 0:
-            ghosts.append((ids.ITEM_COAL, COLOR_PREDICT))
-            ghosts.append((bt.ore_item_id, COLOR_PREDICT))
-        elif bt is not None:
-            ghosts.append((bt.ore_item_id, COLOR_PREDICT))
-        # plus the exact next item if it's something else (e.g. coins when coffer critical)
-        if pred.bank_item_id >= 0 and pred.bank_item_id not in [g[0] for g in ghosts]:
-            ghosts.insert(0, (pred.bank_item_id, COLOR_PREDICT))
+        if pred.bank_item_id >= 0:
+            ghosts.append((pred.bank_item_id, COLOR_PREDICT))
+        if pred.action == BFAction.WITHDRAW_ORE and bt is not None and bt.coal_per_bar > 0:
+            ghosts.append((ids.ITEM_COAL, COLOR_PREDICT_2))
         seen = set()
         for gid, gcolor in ghosts:
             if gid in seen:
