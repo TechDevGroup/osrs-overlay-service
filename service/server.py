@@ -77,15 +77,6 @@ class OverlayService:
         # remember the detected bar type so it sticks across empty-inventory ticks
         if snap.bar_type is not None:
             self.store.last_bar_type = snap.bar_type.name
-        # DEBUG: log detection + furnace signals whenever the resolved type changes
-        _bt = snap.bar_type.name if snap.bar_type else None
-        if _bt != getattr(self, "_last_bt_logged", "?"):
-            self._last_bt_logged = _bt
-            vb = {int(k): v for k, v in (msg.get("varbits") or {}).items()}
-            log.info("BARTYPE=%s | furnace ore m/a/r=%s/%s/%s bars m/a/r=%s/%s/%s | inv=%s | sticky=%s",
-                     _bt, vb.get(952), vb.get(953), vb.get(954),
-                     vb.get(944), vb.get(945), vb.get(946),
-                     [i.get("id") for i in (msg.get("inv") or [])][:6], self.store.last_bar_type)
         self._last_snapshot = snap
         guidance = self.policy.derive(snap)
         # Look-ahead plan from the learned model: an ordered list of the next few
