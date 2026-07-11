@@ -80,7 +80,7 @@ def test_no_duplicate_boxes_and_lookahead():
     from service.policy_bf import BFStateSnapshot, BarType, build_directives, derive
     from service.action_model import token_target
     L = {"bankItems": {"453": {"x": 530, "y": 151}, "449": {"x": 578, "y": 151}},
-         "widgets": {"bankClose": {"x": 700, "y": 80, "child": 786434}}, "hotspots": {}}
+         "widgets": {"bankClose": {"x": 700, "y": 80, "w": 26, "h": 23, "child": 786434}}, "hotspots": {}}
     s = BFStateSnapshot(bar_type=BarType.ADAMANTITE, bank_open=True, inv_coal=0, furnace_coal=2)
     plan = [token_target("Withdraw-All:Coal", BarType.ADAMANTITE),
             token_target("Fill:Open coal bag", BarType.ADAMANTITE)]
