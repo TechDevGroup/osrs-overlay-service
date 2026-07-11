@@ -212,13 +212,15 @@ class StateStore:
         if event.get("name") != "menuOptionClicked":
             return
         option = (event.get("option") or "").lower()
-        item_id = event.get("id")
         target = (event.get("target") or "").lower()
 
-        if item_id in (ids.ITEM_COAL_BAG, ids.ITEM_COAL_BAG_FULL):
+        # Coal bag Fill/Empty — match by TARGET TEXT ("Open coal bag"), NOT item_id.
+        # The menu event's id field is a widget param (e.g. 2), never the coal-bag
+        # item id, so item-id matching never fired: the bag count stayed unknown and
+        # the policy looped on coal, never advancing to ore. (12020 was GEM_BAG too.)
+        if "coal bag" in target:
             if option == "fill":
-                # Absorbs up to capacity; we don't know exact inv coal here, assume full.
-                self.coal_bag_count = ids.COAL_BAG_CAPACITY
+                self.coal_bag_count = ids.COAL_BAG_CAPACITY   # bag now full
             elif option == "empty":
                 self.coal_deposited += max(0, self.coal_bag_count)
                 self.coal_bag_count = 0

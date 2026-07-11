@@ -166,6 +166,7 @@ class BFStateSnapshot:
     ore_deposited: int = 0
     bars_collected: int = 0
     rolling_xp_line: str = ""  # server-computed alternating rolling XP/hr readout
+    inv_slots: tuple = ()      # (slot, item_id) for wrong-item detection
 
     def replace(self, **kw: Any) -> "BFStateSnapshot":
         return dataclasses.replace(self, **kw)
@@ -324,6 +325,10 @@ COLOR_COFFER = "#ff4444"
 COLOR_CLOSE = "#ff8800"       # bank close — actionable (time to leave)
 COLOR_CLOSE_DIM = "#80ff8800" # bank close — prestaged position (dim)
 COLOR_TILE = "#ffcc00"        # standing/click tile the user runs to
+COLOR_WRONG = "#ff2020"       # wrong item in inventory (foreign ore/bar)
+
+# every ore + bar id across bar types — used to flag foreign ores/bars in inventory
+_ALL_ORE_BAR_IDS = {i for bt in BarType for i in (bt.ore_item_id, bt.bar_item_id)}
 
 
 def build_directives(
@@ -372,10 +377,22 @@ def build_directives(
     _add_ondeck(reg, ondeck, s, layout, bt)   # dim look-ahead (drawn before you get there)
     _add_primary(reg, primary, s, layout, bt)  # bright next click
 
-    # Deposit bars: keep the bar highlighted so it's obvious the moment the bank opens.
-    if action == BFAction.DEPOSIT_BARS and bt is not None:
+    # Deposit bars: highlight the bar whenever we're carrying bars in a banking
+    # context — heading to the bank AND while the UI is open — so it's lit the whole
+    # time you're about to deposit, not only on the closed approach.
+    if bt is not None and s.inv_bars > 0 and banking:
         reg.add(("inv", bt.bar_item_id), _PRIO_PRIMARY,
                 {"kind": "invItem", "id": bt.bar_item_id, "color": COLOR_PRIMARY, "label": "Deposit bars"})
+
+    # Wrong items: an ore or bar of a DIFFERENT type than the current run (e.g.
+    # adamantite ore while doing mithril) -> flag the inventory cell RED. Coal,
+    # coins, stamina, tools are never flagged (only foreign ores/bars).
+    if bt is not None and s.inv_slots:
+        wrong = _ALL_ORE_BAR_IDS - {bt.ore_item_id, bt.bar_item_id}
+        for slot, iid in s.inv_slots:
+            if iid in wrong:
+                reg.add(("wrongslot", slot), _PRIO_PRIMARY,
+                        {"kind": "invSlot", "slot": slot, "color": COLOR_WRONG, "label": "wrong item"})
 
     # Coffer when low / critical.
     if s.coffer_critical or (s.coffer_low and s.holding_coins):
@@ -753,6 +770,7 @@ def build_snapshot(raw: Dict[str, Any], ctx: Dict[str, Any]) -> BFStateSnapshot:
         coal_deposited=ctx.get("coal_deposited", 0),
         ore_deposited=ctx.get("ore_deposited", 0),
         bars_collected=ctx.get("bars_collected", 0),
+        inv_slots=tuple((i.get("slot"), i.get("id")) for i in inv if (i.get("id") or 0) > 0),
     )
 
 
