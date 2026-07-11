@@ -579,15 +579,30 @@ def _count_item(inv: List[Dict[str, Any]], item_id: int) -> int:
     return sum(i.get("qty", 0) for i in inv if i.get("id") == item_id)
 
 
-def _detect_bar_type(inv: List[Dict[str, Any]]) -> Optional[BarType]:
-    has_coal = _count_item(inv, ids.ITEM_COAL) > 0
-    # Non-iron ores first (specific detection).
+def _detect_bar_type(inv: List[Dict[str, Any]],
+                     varbits: Optional[Dict[int, int]] = None) -> Optional[BarType]:
+    varbits = varbits or {}
+    # 1. Inventory ore (most specific, non-iron).
     for bt in (BarType.MITHRIL, BarType.ADAMANTITE, BarType.RUNITE):
         if _count_item(inv, bt.ore_item_id) > 0:
             return bt
-    if has_coal and _count_item(inv, ids.ITEM_IRON_ORE) > 0:
-        return BarType.STEEL
+    # 2. Inventory bars (e.g. carrying collected bars back to the bank).
+    for bt in (BarType.MITHRIL, BarType.ADAMANTITE, BarType.RUNITE):
+        if _count_item(inv, bt.bar_item_id) > 0:
+            return bt
+    # 3. FURNACE state — reflects what you're actually smelting even when the
+    #    inventory is empty (the bank-approach ghost was falling back to a stale
+    #    sticky type here). Bars varbit is distinct per type; ore varbit is distinct
+    #    for mith/adam/rune. Check high tiers first (adam/rune outrank mith noise).
+    for bt in (BarType.RUNITE, BarType.ADAMANTITE, BarType.MITHRIL):
+        if varbits.get(bt.furnace_bar_varbit, 0) > 0 or varbits.get(bt.furnace_ore_varbit, 0) > 0:
+            return bt
+    # 4. Iron / steel.
     if _count_item(inv, ids.ITEM_IRON_ORE) > 0:
+        return BarType.STEEL if _count_item(inv, ids.ITEM_COAL) > 0 else BarType.IRON
+    if varbits.get(ids.VAR_FURNACE_STEEL_BARS, 0) > 0:
+        return BarType.STEEL
+    if varbits.get(ids.VAR_FURNACE_IRON_BARS, 0) > 0:
         return BarType.IRON
     return None
 
@@ -620,8 +635,9 @@ def build_snapshot(raw: Dict[str, Any], ctx: Dict[str, Any]) -> BFStateSnapshot:
     if cfg != "AUTO":
         bt = _BAR_CONFIG.get(cfg)
     else:
-        # live detection wins; the remembered type only fills empty-inventory ticks
-        bt = _detect_bar_type(inv) or _BAR_CONFIG.get((ctx.get("last_bar_type") or "").upper())
+        # live detection (inventory + furnace) wins; the remembered type only fills
+        # the rare tick with nothing in inventory AND an empty furnace.
+        bt = _detect_bar_type(inv, varbits) or _BAR_CONFIG.get((ctx.get("last_bar_type") or "").upper())
 
     inv_coal = _count_item(inv, ids.ITEM_COAL)
     inv_ore = _count_item(inv, bt.ore_item_id) if bt else 0
