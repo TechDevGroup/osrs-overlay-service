@@ -292,7 +292,8 @@ _OBJ_IDS = {
 COLOR_PRIMARY = "#ffcc00"      # bright: the next click
 COLOR_OBJECT = "#00ff88"       # world object outline
 COLOR_SECONDARY = "#88ffcc00"  # dim/translucent: also-needed this phase
-COLOR_PREDICT = "#c800ff"      # predicted ghost (bank closed)
+COLOR_PREDICT = "#c800ff"      # predicted ghost (bank closed) — primary
+COLOR_PREDICT_2 = "#80c800ff"  # predicted ghost — companion material (dimmed)
 COLOR_COFFER = "#ff4444"
 COLOR_CLOSE = "#ff8800"
 
@@ -359,15 +360,31 @@ def build_directives(
         directives.append({"kind": "widget", "group": ids.BANK_GROUP_ID,
                            "child": ids.BANK_CLOSE_CHILD, "color": COLOR_CLOSE, "label": "Close bank"})
 
-    # --- Predicted bank-item ghost when heading to the bank (bank closed) -----
+    # --- Predicted bank-item ghosts when heading to the bank (bank closed) -----
+    # Ghost the WHOLE upcoming withdrawal, not just the single next item. The
+    # derived "next" item flickers to ore only briefly in the coal+ore phase, so
+    # a single-item prediction shows coal almost always and the ore ghost never
+    # appears (reported bug). Emit primary + companion (coal<->ore) ghosts, same
+    # pairing as the open-bank companion logic above.
     if not s.bank_open and action == BFAction.GO_TO_BANK:
-        as_if_open = s.replace(bank_open=True)
-        pred = derive(as_if_open)
+        pred = derive(s.replace(bank_open=True))
+        ghosts = []  # (item_id, color)
         if pred.bank_item_id >= 0:
-            bounds = _bank_bounds(pred.bank_item_id, layout)
+            ghosts.append((pred.bank_item_id, COLOR_PREDICT))
+        if bt is not None and bt.coal_per_bar > 0:
+            if pred.action == BFAction.WITHDRAW_COAL:
+                ghosts.append((bt.ore_item_id, COLOR_PREDICT_2))
+            elif pred.action == BFAction.WITHDRAW_ORE:
+                ghosts.append((ids.ITEM_COAL, COLOR_PREDICT_2))
+        seen = set()
+        for gid, gcolor in ghosts:
+            if gid in seen:
+                continue
+            seen.add(gid)
+            bounds = _bank_bounds(gid, layout)
             if bounds is not None:
-                directives.append({"kind": "bankItemPredicted", "id": pred.bank_item_id,
-                                   "x": bounds["x"], "y": bounds["y"], "color": COLOR_PREDICT})
+                directives.append({"kind": "bankItemPredicted", "id": gid,
+                                   "x": bounds["x"], "y": bounds["y"], "color": gcolor})
 
     # --- HUD (always) ---------------------------------------------------------
     directives.append({"kind": "text", "anchor": "topRight", "lines": _hud_lines(s)})
