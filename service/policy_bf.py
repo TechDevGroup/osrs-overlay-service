@@ -433,7 +433,8 @@ def build_directives(
             and action in (BFAction.WITHDRAW_COAL, BFAction.FILL_COAL_BAG)):
         reg.add(("close",), _PRIO_CONTEXT,
                 {"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID, "child": cb.get("child", -1),
-                 "x": cb["x"], "y": cb["y"], "color": COLOR_CLOSE, "label": "Close (fill bag)"})
+                 "x": cb["x"], "y": cb["y"], "w": cb.get("w"), "h": cb.get("h"),
+                 "color": COLOR_CLOSE, "label": "Close (fill bag)"})
 
     emitted = reg.emit()
     cur_stage = _apply_stage_labels(emitted, guidance, bt)  # tag indicators, get current
@@ -560,7 +561,7 @@ def _add_primary(reg: _Reg, primary: Optional[Dict[str, Any]], s: BFStateSnapsho
         if cb is not None:
             reg.add(("close",), _PRIO_PRIMARY,
                     {"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID, "child": cb.get("child", -1),
-                     "x": cb["x"], "y": cb["y"], "color": COLOR_CLOSE, "label": "Close bank"})
+                     "x": cb["x"], "y": cb["y"], "w": cb.get("w"), "h": cb.get("h"), "color": COLOR_CLOSE, "label": "Close bank"})
 
 
 def _add_ondeck(reg: _Reg, ondeck: Optional[Dict[str, Any]], s: BFStateSnapshot,
@@ -593,7 +594,7 @@ def _add_ondeck(reg: _Reg, ondeck: Optional[Dict[str, Any]], s: BFStateSnapshot,
         if cb is not None:
             reg.add(("close",), _PRIO_CONTEXT,
                     {"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID, "child": cb.get("child", -1),
-                     "x": cb["x"], "y": cb["y"], "color": COLOR_CLOSE, "label": "Close soon"})
+                     "x": cb["x"], "y": cb["y"], "w": cb.get("w"), "h": cb.get("h"), "color": COLOR_CLOSE, "label": "Close soon"})
 
 
 # ── Numbered rotation stages ─────────────────────────────────────────────────

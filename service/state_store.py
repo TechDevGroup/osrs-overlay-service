@@ -30,6 +30,16 @@ _SEED_HOTSPOTS = {
 }
 
 
+def _button_like(box: Dict[str, Any]) -> bool:
+    """A close button is a small, roughly-square button — not a tall/thin scrollbar
+    or a big container. Filters out mis-matched 'Close' widgets."""
+    w = box.get("w") or 0
+    h = box.get("h") or 0
+    if not (8 <= w <= 60 and 8 <= h <= 60):
+        return False
+    return max(w, h) <= 2.5 * min(w, h)
+
+
 def default_data_dir() -> Path:
     rl = Path.home() / ".runelite" / "overlay-service"
     try:
@@ -179,6 +189,11 @@ class StateStore:
             }
             changed = True
         for key, box in (discovered.get("widgets") or {}).items():
+            # The close button is a small ~square button; reject scrollbar-like
+            # (tall/thin) or oversized bounds so a mis-matched "Close" widget can't
+            # overwrite the good close-button position (reported: "moves to scrollbar").
+            if key == "bankClose" and not _button_like(box):
+                continue
             self.layout["widgets"][key] = box
             changed = True
         if changed:
