@@ -582,22 +582,17 @@ def _count_item(inv: List[Dict[str, Any]], item_id: int) -> int:
 def _detect_bar_type(inv: List[Dict[str, Any]],
                      varbits: Optional[Dict[int, int]] = None) -> Optional[BarType]:
     varbits = varbits or {}
-    # 1. Inventory ore (most specific, non-iron).
+    # ACTIVE ORE first — what you are smelting right NOW (inventory being withdrawn,
+    # or ore loaded in the furnace). This must outrank leftover BARS from a previous
+    # ore (e.g. uncollected adamantite bars) so switching to mithril takes effect.
     for bt in (BarType.MITHRIL, BarType.ADAMANTITE, BarType.RUNITE):
-        if _count_item(inv, bt.ore_item_id) > 0:
+        if _count_item(inv, bt.ore_item_id) > 0 or varbits.get(bt.furnace_ore_varbit, 0) > 0:
             return bt
-    # 2. Inventory bars (e.g. carrying collected bars back to the bank).
+    # Then carried / queued BARS (weaker: can be stale output).
     for bt in (BarType.MITHRIL, BarType.ADAMANTITE, BarType.RUNITE):
-        if _count_item(inv, bt.bar_item_id) > 0:
+        if _count_item(inv, bt.bar_item_id) > 0 or varbits.get(bt.furnace_bar_varbit, 0) > 0:
             return bt
-    # 3. FURNACE state — reflects what you're actually smelting even when the
-    #    inventory is empty (the bank-approach ghost was falling back to a stale
-    #    sticky type here). Bars varbit is distinct per type; ore varbit is distinct
-    #    for mith/adam/rune. Check high tiers first (adam/rune outrank mith noise).
-    for bt in (BarType.RUNITE, BarType.ADAMANTITE, BarType.MITHRIL):
-        if varbits.get(bt.furnace_bar_varbit, 0) > 0 or varbits.get(bt.furnace_ore_varbit, 0) > 0:
-            return bt
-    # 4. Iron / steel.
+    # Iron / steel.
     if _count_item(inv, ids.ITEM_IRON_ORE) > 0:
         return BarType.STEEL if _count_item(inv, ids.ITEM_COAL) > 0 else BarType.IRON
     if varbits.get(ids.VAR_FURNACE_STEEL_BARS, 0) > 0:
