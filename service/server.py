@@ -65,6 +65,10 @@ class OverlayService:
     def _handle_state(self, msg: Dict[str, Any]) -> Dict[str, Any]:
         ctx = self.store.ctx(self.bar_type, self.coffer_low_minutes, self.coffer_critical_gp)
         snap = self.policy.build_snapshot(msg, ctx)
+        # rolling XP/hr sampler (needs wall clock + bar type -> done here, not in the pure policy)
+        self.store.record_sample(snap.bars_collected)
+        xp_per_bar = snap.bar_type.xp_per_bar if snap.bar_type else 0.0
+        snap = snap.replace(rolling_xp_line=self.store.rolling_xp_line(xp_per_bar))
         self._last_snapshot = snap
         guidance = self.policy.derive(snap)
         directives = self.policy.build_directives(snap, guidance, self.store.layout_for_policy())

@@ -26,17 +26,17 @@ from . import ids
 
 # ── BarType ──────────────────────────────────────────────────────────────────
 class BarType(Enum):
-    #   name, ore_item, bar_item, coal_per_bar, furnace_ore_varbit, furnace_bar_varbit
+    #   name, ore_item, bar_item, coal_per_bar, furnace_ore_varbit, furnace_bar_varbit, xp_per_bar
     IRON = ("Iron", ids.ITEM_IRON_ORE, ids.ITEM_IRON_BAR, 0,
-            ids.VAR_FURNACE_IRON_ORE, ids.VAR_FURNACE_IRON_BARS)
+            ids.VAR_FURNACE_IRON_ORE, ids.VAR_FURNACE_IRON_BARS, 12.5)
     STEEL = ("Steel", ids.ITEM_IRON_ORE, ids.ITEM_STEEL_BAR, 1,
-             ids.VAR_FURNACE_IRON_ORE, ids.VAR_FURNACE_STEEL_BARS)
+             ids.VAR_FURNACE_IRON_ORE, ids.VAR_FURNACE_STEEL_BARS, 17.5)
     MITHRIL = ("Mithril", ids.ITEM_MITHRIL_ORE, ids.ITEM_MITHRIL_BAR, 2,
-               ids.VAR_FURNACE_MITHRIL_ORE, ids.VAR_FURNACE_MITHRIL_BARS)
+               ids.VAR_FURNACE_MITHRIL_ORE, ids.VAR_FURNACE_MITHRIL_BARS, 30.0)
     ADAMANTITE = ("Adamantite", ids.ITEM_ADAMANTITE_ORE, ids.ITEM_ADAMANTITE_BAR, 3,
-                  ids.VAR_FURNACE_ADAMANTITE_ORE, ids.VAR_FURNACE_ADAMANTITE_BARS)
+                  ids.VAR_FURNACE_ADAMANTITE_ORE, ids.VAR_FURNACE_ADAMANTITE_BARS, 37.5)
     RUNITE = ("Runite", ids.ITEM_RUNITE_ORE, ids.ITEM_RUNITE_BAR, 4,
-              ids.VAR_FURNACE_RUNITE_ORE, ids.VAR_FURNACE_RUNITE_BARS)
+              ids.VAR_FURNACE_RUNITE_ORE, ids.VAR_FURNACE_RUNITE_BARS, 50.0)
 
     @property
     def display_name(self) -> str:
@@ -53,6 +53,10 @@ class BarType(Enum):
     @property
     def coal_per_bar(self) -> int:
         return self.value[3]
+
+    @property
+    def xp_per_bar(self) -> float:
+        return self.value[6]
 
     @property
     def furnace_ore_varbit(self) -> int:
@@ -161,6 +165,7 @@ class BFStateSnapshot:
     coal_deposited: int = 0
     ore_deposited: int = 0
     bars_collected: int = 0
+    rolling_xp_line: str = ""  # server-computed alternating rolling XP/hr readout
 
     def replace(self, **kw: Any) -> "BFStateSnapshot":
         return dataclasses.replace(self, **kw)
@@ -270,6 +275,11 @@ def _hud_lines(s: BFStateSnapshot) -> List[str]:
         lines.append(f"Coal/hr: {coal_hr}")
         lines.append(f"Ore/hr: {ore_hr}")
 
+    # Single rolling XP/hr line that alternates window (2m / 10m / 20m / ... / cum)
+    # instead of stacking one row per interval. Computed server-side (needs time).
+    if s.rolling_xp_line:
+        lines.append(s.rolling_xp_line)
+
     if s.coffer_balance >= 0:
         mins = s.coffer_balance / ids.COFFER_DRAIN_PER_MINUTE if s.coffer_balance > 0 else 0.0
         tag = ""
@@ -289,13 +299,23 @@ _OBJ_IDS = {
     ObjTarget.COFFER: list(ids.COFFER_IDS),
 }
 
+# The learned standing tile (hotspot) the user clicks to run to for each target,
+# keyed by the canonical object id used in the hotspots store.
+_TARGET_HOTSPOT_ID = {
+    ObjTarget.DISPENSER: ids.DISPENSER_BASE,
+    ObjTarget.CONVEYOR: ids.CONVEYOR_BELT,
+    ObjTarget.BANK_CHEST: ids.BANK_CHEST,
+}
+
 COLOR_PRIMARY = "#ffcc00"      # bright: the next click
 COLOR_OBJECT = "#00ff88"       # world object outline
 COLOR_SECONDARY = "#88ffcc00"  # dim/translucent: also-needed this phase
 COLOR_PREDICT = "#c800ff"      # predicted ghost (bank closed) — primary
 COLOR_PREDICT_2 = "#80c800ff"  # predicted ghost — companion material (dimmed)
 COLOR_COFFER = "#ff4444"
-COLOR_CLOSE = "#ff8800"
+COLOR_CLOSE = "#ff8800"       # bank close — actionable (time to leave)
+COLOR_CLOSE_DIM = "#80ff8800" # bank close — prestaged position (dim)
+COLOR_TILE = "#ffcc00"        # standing/click tile the user runs to
 
 
 def build_directives(
@@ -346,19 +366,43 @@ def build_directives(
             directives.append({"kind": "worldArrow", "plane": loc.get("plane", 0),
                                "x": loc["x"], "y": loc["y"], "color": COLOR_OBJECT})
 
+    # --- Standing tile the user clicks to run to for this action (learned) -----
+    # e.g. the run-by tile at the bar dispenser for COLLECT_BARS. Hotspots are
+    # stored but were never emitted as tile directives (reported: never showed).
+    hs_id = _TARGET_HOTSPOT_ID.get(target)
+    if hs_id is not None:
+        hs = (layout.get("hotspots") or {}).get(str(hs_id))
+        if hs is not None:
+            directives.append({"kind": "tile", "plane": hs.get("plane", 0),
+                               "x": hs["x"], "y": hs["y"], "color": COLOR_TILE,
+                               "fill": "#33ffcc00", "label": action.label})
+
     # --- Coffer highlight when low / critical --------------------------------
     if s.coffer_critical or (s.coffer_low and s.holding_coins):
         for oid in ids.COFFER_IDS:
             directives.append({"kind": "object", "id": oid, "color": COLOR_COFFER,
                                "label": "Coffer", "outline": True})
 
-    # --- Bank close button when leaving the bank -----------------------------
-    if s.bank_open and target != ObjTarget.NONE and action not in (
+    # --- Bank close button: prestage its position BEFORE the UI opens (predicted
+    #     from cached bounds) and show it live WHILE the UI is up. Dim as a
+    #     position hint; brighten when it's actually time to leave. ------------
+    widgets_layout = layout.get("widgets") or {}
+    close_bounds = widgets_layout.get("bankClose") \
+        or widgets_layout.get(f"{ids.BANK_GROUP_ID}.{ids.BANK_CLOSE_CHILD}")
+    in_bank_ctx = s.bank_open or s.at_bank or action == BFAction.GO_TO_BANK
+    time_to_leave = s.bank_open and target != ObjTarget.NONE and action not in (
         BFAction.WITHDRAW_COAL, BFAction.WITHDRAW_ORE, BFAction.WITHDRAW_COINS,
         BFAction.FILL_COAL_BAG, BFAction.DEPOSIT_BARS,
-    ):
-        directives.append({"kind": "widget", "group": ids.BANK_GROUP_ID,
-                           "child": ids.BANK_CLOSE_CHILD, "color": COLOR_CLOSE, "label": "Close bank"})
+    )
+    if in_bank_ctx:
+        cc = COLOR_CLOSE if time_to_leave else COLOR_CLOSE_DIM
+        if s.bank_open:  # live position while the UI is up
+            directives.append({"kind": "widget", "group": ids.BANK_GROUP_ID,
+                               "child": ids.BANK_CLOSE_CHILD, "color": cc, "label": "Close bank"})
+        elif close_bounds is not None:  # predicted position before the UI opens
+            directives.append({"kind": "widgetPredicted", "group": ids.BANK_GROUP_ID,
+                               "child": ids.BANK_CLOSE_CHILD, "x": close_bounds["x"],
+                               "y": close_bounds["y"], "color": cc, "label": "Close bank"})
 
     # --- Predicted bank-item ghosts when heading to the bank (bank closed) -----
     # Ghost the WHOLE upcoming withdrawal, not just the single next item. The
@@ -366,8 +410,15 @@ def build_directives(
     # a single-item prediction shows coal almost always and the ore ghost never
     # appears (reported bug). Emit primary + companion (coal<->ore) ghosts, same
     # pairing as the open-bank companion logic above.
-    if not s.bank_open and action == BFAction.GO_TO_BANK:
-        pred = derive(s.replace(bank_open=True))
+    # Also fire on the return-leg actions (COLLECT_BARS / REFILL_COFFER), not just
+    # GO_TO_BANK: while running back past the dispenser the player is still headed
+    # to the bank, so the dispenser highlight should NOT suppress the upcoming-
+    # withdrawal ghosts (reported: dispenser overrides next highlights until near
+    # the chest).
+    if not s.bank_open and action in (
+        BFAction.GO_TO_BANK, BFAction.COLLECT_BARS, BFAction.REFILL_COFFER,
+    ):
+        pred = derive(s.replace(bank_open=True, inv_bars=0))
         ghosts = []  # (item_id, color)
         if pred.bank_item_id >= 0:
             ghosts.append((pred.bank_item_id, COLOR_PREDICT))

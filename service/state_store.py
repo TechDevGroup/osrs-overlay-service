@@ -64,6 +64,9 @@ class StateStore:
         self.ore_deposited: int = 0
         self.bars_collected: int = 0
         self.session_start: float = time.time()
+        # rolling XP/hr sampler: (timestamp, cumulative bars). Throttled + pruned.
+        self.samples: list = [(self.session_start, 0)]
+        self._last_sample_t: float = 0.0
 
     # ── json helpers ──────────────────────────────────────────────────────────
     @staticmethod
@@ -90,6 +93,59 @@ class StateStore:
     # ── session ───────────────────────────────────────────────────────────────
     def session_seconds(self) -> float:
         return time.time() - self.session_start
+
+    # ── rolling XP/hr sampler ───────────────────────────────────────────────────
+    # A single alternating readout: 2-minute reactive window, then longer averages
+    # at 10-minute increments up to the elapsed session, plus session-cumulative —
+    # cycled one at a time in the HUD rather than stacked as separate rows.
+    SAMPLE_THROTTLE_S = 3.0     # don't record more often than this
+    SAMPLE_MAX_AGE_S = 70 * 60  # keep ~70 min of history (covers up to 60m window)
+    ROTATE_SECONDS = 5.0        # switch displayed window every N seconds
+    SHORT_WINDOW_MIN = 2
+
+    def record_sample(self, bars_collected: int) -> None:
+        now = time.time()
+        if now - self._last_sample_t < self.SAMPLE_THROTTLE_S:
+            return
+        self._last_sample_t = now
+        self.samples.append((now, bars_collected))
+        cutoff = now - self.SAMPLE_MAX_AGE_S
+        if self.samples[0][0] < cutoff:
+            self.samples = [sm for sm in self.samples if sm[0] >= cutoff] or self.samples[-1:]
+
+    def _active_windows(self, elapsed_min: float):
+        """(label, minutes|None) list; None = session cumulative. Only windows with
+        enough elapsed time are included, so we never show a 20m average at 8m in."""
+        windows = []
+        if elapsed_min >= self.SHORT_WINDOW_MIN:
+            windows.append(("2m", self.SHORT_WINDOW_MIN))
+        w = 10
+        while w <= elapsed_min:
+            windows.append((f"{w}m", w))
+            w += 10
+        windows.append(("cum", None))
+        return windows
+
+    def rolling_xp_line(self, xp_per_bar: float) -> str:
+        if xp_per_bar <= 0:
+            return ""
+        now = time.time()
+        elapsed_min = (now - self.session_start) / 60.0
+        if elapsed_min < 0.2:
+            return ""
+        windows = self._active_windows(elapsed_min)
+        label, minutes = windows[int(now / self.ROTATE_SECONDS) % len(windows)]
+        if minutes is None:
+            base_t, base_bars = self.session_start, 0
+        else:
+            cutoff = now - minutes * 60
+            base = next((sm for sm in self.samples if sm[0] >= cutoff), self.samples[0])
+            base_t, base_bars = base
+        span_h = (now - base_t) / 3600.0
+        if span_h <= 0:
+            return ""
+        xp_hr = (self.bars_collected - base_bars) * xp_per_bar / span_h
+        return f"XP/hr ({label}): {xp_hr:,.0f}"
 
     def ctx(self, bar_type_config: str = "AUTO",
             coffer_low_minutes: int = 20, coffer_critical_gp: int = 0) -> Dict[str, Any]:
@@ -127,6 +183,7 @@ class StateStore:
             "bankItems": self.layout.get("bankItems", {}),
             "widgets": self.layout.get("widgets", {}),
             "objects": self.layout.get("objects", {}),
+            "hotspots": self.hotspots,
         }
 
     # ── hotspots (learned standing tiles) ──────────────────────────────────────
@@ -172,3 +229,5 @@ class StateStore:
         self.ore_deposited = 0
         self.bars_collected = 0
         self.session_start = time.time()
+        self.samples = [(self.session_start, 0)]
+        self._last_sample_t = 0.0
